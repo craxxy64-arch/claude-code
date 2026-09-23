@@ -1,7 +1,7 @@
 // Camera Radar service worker: makes the app installable and usable offline.
 // It only caches the app's own files and the model weights; camera frames never
 // touch the network or this cache.
-const CACHE = 'camera-radar-v2';
+const CACHE = 'camera-radar-v3';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', (event) => {

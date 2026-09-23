@@ -126,6 +126,27 @@ const GROUPS: Group[] = [
       { key: 'snapshotOverlays', label: 'Snapshot overlays by default', type: 'toggle' },
     ],
   },
+  {
+    title: 'Voice — Xcv',
+    fields: [
+      {
+        key: 'voiceEnabled',
+        label: 'Enable Xcv',
+        type: 'toggle',
+        help: 'Adds a mic button that controls this app by voice. Speech recognition in this browser is not on-device — while the mic is live, audio is sent to your browser\'s speech service (e.g. Google on Chrome), not to Camera Radar. The mic is off unless you press and hold it, or turn on hands-free below.',
+      },
+      {
+        key: 'voiceHandsFree',
+        label: 'Hands-free (wake word "Xcv")',
+        type: 'toggle',
+        help: 'Keeps the mic continuously listening for the word "Xcv" instead of push-to-talk. A red indicator shows whenever the mic is live. Off by default.',
+      },
+      { key: 'voiceVoiceURI', label: 'Xcv\'s voice', type: 'select', options: 'dynamic' },
+      { key: 'voiceRate', label: 'Speaking rate', type: 'range', min: 0.6, max: 1.6, step: 0.05, format: (v) => `${v.toFixed(2)}×` },
+      { key: 'voicePitch', label: 'Pitch', type: 'range', min: 0, max: 2, step: 0.05, format: (v) => v.toFixed(2) },
+      { key: 'voiceVolume', label: 'Volume', type: 'range', min: 0, max: 1, step: 0.05, format: pct },
+    ],
+  },
 ];
 
 /** Settings drawer generated from a schema and kept in sync with the store. */
@@ -209,9 +230,10 @@ export class SettingsPanel {
       if (f.options !== 'dynamic') {
         sel.innerHTML = f.options.map((o) => `<option value="${o.value}">${escapeHtml(o.label)}</option>`).join('');
       }
+      const nullable = f.key === 'cameraId' || f.key === 'voiceVoiceURI';
       sel.addEventListener('change', () => {
         const raw = sel.value;
-        const value = f.numeric ? Number(raw) : f.key === 'cameraId' ? raw || null : raw;
+        const value = f.numeric ? Number(raw) : nullable ? raw || null : raw;
         this.store.set({ [f.key]: value } as Partial<Settings>);
       });
       this.inputs.set(f.key, sel);

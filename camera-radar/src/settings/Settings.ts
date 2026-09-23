@@ -44,6 +44,13 @@ export interface Settings {
   // Capture
   recordOverlays: boolean;
   snapshotOverlays: boolean;
+  // Voice (Xcv)
+  voiceEnabled: boolean;
+  voiceHandsFree: boolean;
+  voiceRate: number;
+  voicePitch: number;
+  voiceVolume: number;
+  voiceVoiceURI: string | null;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -77,6 +84,12 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: 'dark',
   recordOverlays: true,
   snapshotOverlays: true,
+  voiceEnabled: false,
+  voiceHandsFree: false,
+  voiceRate: 0.95,
+  voicePitch: 0.75,
+  voiceVolume: 1,
+  voiceVoiceURI: null,
 };
 
 const STORAGE_KEY = 'camera-radar.settings.v1';

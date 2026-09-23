@@ -338,6 +338,105 @@ try {
     await ctx.close();
   }
 
+  // -------------------------------------------------------- voice (Xcv) --
+  // Real speech audio can't be fed to headless Chromium, so this stubs the
+  // Web Speech API with a controllable fake and drives it exactly like a
+  // real SpeechRecognition would (start/result/stop), to verify the actual
+  // command → action → response pipeline end to end.
+  {
+    const { page: p, ctx, errors: errs } = await openPage(browser, { init: () => {
+      class FakeRecognition extends EventTarget {
+        constructor() {
+          super();
+          this.continuous = false;
+          this.interimResults = false;
+          this.lang = 'en-US';
+          this._started = false;
+        }
+        start() {
+          if (this._started) throw new DOMException('already started', 'InvalidStateError');
+          this._started = true;
+          this.onstart?.();
+          window.__activeRecognition = this;
+        }
+        stop() {
+          if (!this._started) return;
+          this._started = false;
+          this.onend?.();
+          if (window.__activeRecognition === this) window.__activeRecognition = null;
+        }
+        abort() {
+          this.stop();
+        }
+        fireResult(text, isFinal = true) {
+          this.onresult?.({ resultIndex: 0, results: { 0: { isFinal, 0: { transcript: text, confidence: 0.9 }, length: 1 }, length: 1 } });
+        }
+      }
+      window.SpeechRecognition = FakeRecognition;
+      window.webkitSpeechRecognition = FakeRecognition;
+      window.__sayToXcv = (text) => {
+        const r = window.__activeRecognition;
+        if (!r) return 'NOT_LISTENING';
+        r.fireResult(text, true);
+        r.stop();
+        return 'OK';
+      };
+    } });
+    const say = async (text) => {
+      await p.hover('#btnVoiceMic');
+      await p.mouse.down();
+      await p.waitForTimeout(120);
+      const code = await p.evaluate((t) => window.__sayToXcv(t), text);
+      await p.mouse.up();
+      await sleep(300);
+      return code;
+    };
+    await p.evaluate(() => window.cameraRadar.settings.set({ voiceEnabled: true }));
+    await p.waitForSelector('#btnVoiceMic:not([hidden])');
+    check('Xcv: mic button appears once enabled and speech API is supported', await p.evaluate(() => window.cameraRadar.voice.isSupported()));
+
+    await say('start the camera');
+    await p.waitForFunction(() => window.cameraRadar.camera.info().state === 'live', null, { timeout: 15000 });
+    check('Xcv: push-to-talk "start the camera" actually starts it', true);
+    await sleep(2500);
+
+    await say('status report');
+    const statusResp = await p.textContent('#voiceResponse');
+    check('Xcv: status report speaks real live numbers', /Tracking \d+ target|Camera live/.test(statusResp), statusResp);
+
+    await say('switch to radar mode');
+    check('Xcv: voice command changes display mode', (await p.evaluate(() => window.cameraRadar.settings.get('layoutMode'))) === 'radar');
+
+    await say('what is the weather today');
+    check('Xcv: unrecognised speech gets a "didn\'t understand" reply, not a stale one', /didn'?t|not sure/i.test(await p.textContent('#voiceResponse')));
+
+    const firstId = await p.evaluate(() => window.cameraRadar.tracker.getTracks()[0]?.id ?? null);
+    if (firstId != null) {
+      await say(`select target ${firstId}`);
+      check('Xcv: "select target N" opens that target\'s panel', !(await p.isHidden('#targetDrawer')));
+    }
+    await say('select target 999');
+    check('Xcv: a target ID that does not exist gets an honest "not found" reply', /don'?t see a target/i.test(await p.textContent('#voiceResponse')));
+
+    await say('set confidence to 75 percent');
+    check('Xcv: "set confidence" changes the real setting', (await p.evaluate(() => window.cameraRadar.settings.get('confidenceThreshold'))) === 0.75);
+
+    // Hands-free: must ignore speech without the wake word, and act on speech with it.
+    await p.evaluate(() => window.cameraRadar.settings.set({ voiceHandsFree: true }));
+    await sleep(300);
+    check('Xcv: hands-free mode puts the mic in continuous listening', (await p.evaluate(() => window.cameraRadar.voice.state)) === 'listening');
+    await p.evaluate(() => window.__sayToXcv('stop the camera'));
+    await sleep(300);
+    check('Xcv: hands-free ignores a command with no wake word', (await p.evaluate(() => window.cameraRadar.camera.info().state)) === 'live');
+    await p.evaluate(() => window.__sayToXcv('xcv stop the camera'));
+    await sleep(400);
+    check('Xcv: hands-free acts once the wake word is spoken', (await p.evaluate(() => window.cameraRadar.camera.info().state)) !== 'live');
+
+    check('Xcv: no page errors from any voice interaction', errs.length === 0, errs.slice(0, 3).join(' | '));
+    await p.screenshot({ path: join(OUT, '20-voice-assistant.png') });
+    await ctx.close();
+  }
+
   // ------------------------------------------------------ model failure --
   {
     const { page: p, ctx, errors: errs } = await openPage(browser, {

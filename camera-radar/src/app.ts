@@ -18,6 +18,9 @@ import { OverlayRenderer, type OverlayFrame, type OverlayOptions, type Rect } fr
 import { SettingsPanel } from './ui/SettingsPanel.ts';
 import { TargetPanel } from './ui/TargetPanel.ts';
 import { toast } from './ui/toasts.ts';
+import type { VoiceActions } from './voice/actions.ts';
+import { VoiceAssistant, type VoiceState } from './voice/VoiceAssistant.ts';
+import type { VoiceStatusSnapshot } from './voice/types.ts';
 import { colorFor } from './detection/categories.ts';
 import { formatBytes, formatClock, formatDuration, formatId } from './utils/format.ts';
 import { errorMessage, logger } from './utils/logger.ts';
@@ -50,6 +53,7 @@ export class App {
   readonly recorder = new Recorder();
   readonly overlay = new OverlayRenderer();
   readonly radar: RadarRenderer;
+  readonly voice: VoiceAssistant;
 
   private overlayCanvas = $<HTMLCanvasElement>('overlay');
   private overlayCtx = this.overlayCanvas.getContext('2d')!;
@@ -94,12 +98,65 @@ export class App {
       this.settings.reset();
       toast('Settings reset to defaults');
     });
+    this.voice = new VoiceAssistant(this.voiceActions());
+  }
+
+  /**
+   * Everything Xcv is allowed to do — each entry calls a control this app
+   * already exposes elsewhere in the UI. Nothing here reaches outside this
+   * browser tab: a voice assistant running on a web page cannot control the
+   * operating system or other applications, and Xcv does not claim to.
+   */
+  private voiceActions(): VoiceActions {
+    return {
+      startCamera: () => void this.startCamera(),
+      stopCamera: () => this.camera.stop(),
+      openVideoPicker: () => $<HTMLInputElement>('fileInput').click(),
+      setMode: (mode) => this.settings.set({ layoutMode: mode }),
+      setMirror: (on) => this.settings.set({ mirror: on }),
+      snapshot: () => this.takeSnapshot(),
+      setRecording: (on) => {
+        if ((this.recorder.state === 'recording') !== on) this.toggleRecording();
+      },
+      setHeatmap: (on) => {
+        if (on && !this.settings.get('motionEnabled')) this.settings.set({ motionEnabled: true });
+        this.settings.set({ showHeatmap: on });
+      },
+      resetHeatmap: () => this.motion.heatmap.reset(),
+      setSettingsOpen: (open) => this.setSettingsDrawerOpen(open),
+      setDebugOpen: (open) => this.settings.set({ showDebug: open }),
+      setFullscreenRadar: (on) => void (on ? this.toggleRadarFullscreen() : this.exitRadarFullscreen()),
+      selectTarget: (id) => {
+        this.select(id);
+        return this.tracker.getTrack(id)?.label ?? null;
+      },
+      deselectTarget: () => this.select(null),
+      setConfidence: (value) => this.settings.set({ confidenceThreshold: Math.round(value * 20) / 20 }),
+      getStatus: () => this.voiceStatus(),
+    };
+  }
+
+  private voiceStatus(): VoiceStatusSnapshot {
+    const cam = this.camera.info();
+    const tracks = this.tracker.getTracks();
+    return {
+      cameraOn: cam.state === 'live',
+      cameraLabel: cam.label,
+      targetsTracked: tracks.length,
+      moving: tracks.filter((t) => t.movement === 'moving' && t.status === 'active').length,
+      people: tracks.filter((t) => t.label === 'person').length,
+      modelStatus: this.detector.info.status,
+      processingFps: this.analytics.processing.value(),
+      motionLevel: this.motion.last?.level ?? 'none',
+      recording: this.recorder.state === 'recording',
+    };
   }
 
   init(): void {
     this.applyAllSettings();
     this.bindUi();
     this.bindPipeline();
+    this.onVoiceState(this.voice.state); // sync mic button before any voice.on('state') fires
     this.populateResolutions();
 
     if (!this.camera.isSupported()) {
@@ -148,6 +205,39 @@ export class App {
     this.recorder.on('saved', (rec) => this.onRecordingSaved(rec));
 
     this.settings.on('change', ({ keys }) => this.onSettingsChange(keys));
+
+    this.voice.on('state', (state) => this.onVoiceState(state));
+    this.voice.on('heard', ({ text, final }) => {
+      const el = $('voiceTranscript');
+      el.textContent = text || '…';
+      el.classList.toggle('is-interim', !final);
+    });
+    this.voice.on('command', ({ parsed, spoken }) => {
+      $('voiceResponse').textContent = spoken;
+      this.pushEvent({ at: Date.now(), type: 'system', text: `Xcv: "${parsed.matched}" → ${spoken}` });
+    });
+    this.voice.on('unrecognised', ({ text, response }) => {
+      $('voiceResponse').textContent = response;
+      this.pushEvent({ at: Date.now(), type: 'system', text: `Xcv: heard "${text}", no matching command` });
+    });
+    this.voice.on('error', (err) => {
+      if (err === 'not-allowed' || err === 'service-not-allowed') {
+        toast('Microphone permission denied — Xcv needs mic access to listen for commands.', 'alert', 7000);
+      }
+    });
+  }
+
+  private onVoiceState(state: VoiceState): void {
+    const mic = $<HTMLButtonElement>('btnVoiceMic');
+    const orb = $('voiceOrb');
+    mic.dataset.state = state;
+    orb.dataset.state = state;
+    $('voiceState').textContent = state;
+    mic.setAttribute('aria-pressed', String(state === 'listening'));
+    if (state === 'unsupported') {
+      mic.disabled = true;
+      mic.title = 'Xcv needs a browser with speech recognition (Chrome or Edge).';
+    }
   }
 
   private async loadModel(): Promise<void> {
@@ -864,6 +954,12 @@ export class App {
   // ======================================================================
   // Selection / fullscreen
   // ======================================================================
+  private setSettingsDrawerOpen(open: boolean): void {
+    $('settingsDrawer').hidden = !open;
+    $('btnSettings').setAttribute('aria-pressed', String(open));
+    if (open) this.targetPanel.close();
+  }
+
   private select(id: number | null): void {
     this.selectedId = id;
     if (id == null) {
@@ -872,8 +968,7 @@ export class App {
     }
     const track = this.tracker.getTrack(id);
     if (!track) return;
-    $('settingsDrawer').hidden = true;
-    $<HTMLButtonElement>('btnSettings').setAttribute('aria-pressed', 'false');
+    this.setSettingsDrawerOpen(false);
     this.targetPanel.open(track);
     this.lastUi = 0; // refresh immediately
   }
@@ -958,6 +1053,23 @@ export class App {
     if (has('trackingSensitivity')) this.tracker.configure({ sensitivity: s.trackingSensitivity });
     if (has('motionEnabled') && !s.motionEnabled) this.motion.reset();
 
+    if (has('voiceEnabled')) {
+      $('btnVoiceMic').hidden = !s.voiceEnabled || !this.voice.isSupported();
+      if (!s.voiceEnabled) {
+        this.voice.stopAll();
+        $('voiceHud').hidden = true;
+      }
+    }
+    if (has('voiceRate') || has('voicePitch') || has('voiceVolume') || has('voiceVoiceURI')) {
+      this.voice.configure({ rate: s.voiceRate, pitch: s.voicePitch, volume: s.voiceVolume, voiceURI: s.voiceVoiceURI });
+    }
+    if (has('voiceHandsFree') || has('voiceEnabled')) {
+      const handsFree = s.voiceEnabled && s.voiceHandsFree && this.voice.isSupported();
+      $<HTMLButtonElement>('btnVoiceMic').title = handsFree ? 'Xcv is listening — say "Xcv" then a command (V to mute)' : 'Hold to talk to Xcv (V)';
+      this.voice.setHandsFree(handsFree);
+      if (handsFree) $('voiceHud').hidden = false;
+    }
+
     if (initial) return;
 
     if (has('model') && s.detectionEnabled) {
@@ -1030,6 +1142,44 @@ export class App {
   // ======================================================================
   // DOM bindings
   // ======================================================================
+  private bindVoiceUi(): void {
+    const mic = $<HTMLButtonElement>('btnVoiceMic');
+    const startTalk = (e: Event) => {
+      e.preventDefault();
+      if (mic.disabled) return;
+      $('voiceHud').hidden = false;
+      if (this.settings.get('voiceHandsFree')) return; // already listening continuously
+      this.voice.pushToTalkStart();
+    };
+    const stopTalk = () => {
+      if (!this.settings.get('voiceHandsFree')) this.voice.pushToTalkStop();
+    };
+    mic.addEventListener('pointerdown', startTalk);
+    mic.addEventListener('pointerup', stopTalk);
+    mic.addEventListener('pointerleave', stopTalk);
+    mic.addEventListener('pointercancel', stopTalk);
+    mic.addEventListener('click', () => {
+      // In hands-free mode the mic is already always-on; a click just surfaces the HUD.
+      if (this.settings.get('voiceHandsFree')) $('voiceHud').hidden = false;
+    });
+    $('btnVoiceHudClose').onclick = () => {
+      $('voiceHud').hidden = true;
+      if (!this.settings.get('voiceHandsFree')) this.voice.pushToTalkStop();
+    };
+
+    this.populateVoiceList();
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.onvoiceschanged = () => this.populateVoiceList();
+    }
+  }
+
+  private populateVoiceList(): void {
+    const voices = this.voice.availableVoices().filter((v) => v.lang.startsWith('en'));
+    const list = voices.length ? voices : this.voice.availableVoices();
+    const opts = [{ value: '', label: 'Automatic (deep, calm)' }, ...list.map((v) => ({ value: v.voiceURI, label: `${v.name} (${v.lang})` }))];
+    this.settingsPanel.setOptions('voiceVoiceURI', opts);
+  }
+
   private bindUi(): void {
     const topbar = document.querySelector<HTMLElement>('.topbar')!;
     const toolbar = document.querySelector<HTMLElement>('.toolbar')!;
@@ -1098,28 +1248,21 @@ export class App {
       if (document.fullscreenElement === this.radarWrap) this.updateRadarSide(this.tracker.getTracks(), this.camera.width, this.camera.height);
     });
 
-    const settingsDrawer = $('settingsDrawer');
-    $('btnSettings').onclick = () => {
-      const open = settingsDrawer.hidden;
-      settingsDrawer.hidden = !open;
-      $('btnSettings').setAttribute('aria-pressed', String(open));
-      if (open) this.targetPanel.close();
-    };
+    $('btnSettings').onclick = () => this.setSettingsDrawerOpen($('settingsDrawer').hidden);
     $('btnDebug').onclick = () => this.settings.set({ showDebug: !this.settings.get('showDebug') });
     $('btnDebugClose').onclick = () => this.settings.set({ showDebug: false });
     document.querySelectorAll<HTMLButtonElement>('[data-close]').forEach((b) => {
       b.onclick = () => {
         const target = b.dataset.close!;
         if (target === 'targetDrawer') this.select(null);
-        else {
-          $(target).hidden = true;
-          $('btnSettings').setAttribute('aria-pressed', 'false');
-        }
+        else if (target === 'settingsDrawer') this.setSettingsDrawerOpen(false);
+        else $(target).hidden = true;
       };
     });
     $('chipModel').onclick = () => {
       if (this.detector.info.status === 'error') void this.loadModel();
     };
+    this.bindVoiceUi();
 
     // Target selection on the camera overlay and the radar.
     this.overlayCanvas.addEventListener('click', (e) => {
@@ -1168,14 +1311,19 @@ export class App {
       else if (e.key === 'r' || e.key === 'R') this.toggleRecording();
       else if (e.key === 'f' || e.key === 'F') void this.toggleRadarFullscreen();
       else if (e.key === 'd' || e.key === 'D') this.settings.set({ showDebug: !this.settings.get('showDebug') });
-      else if (e.key === 'Escape') {
+      else if ((e.key === 'v' || e.key === 'V') && this.settings.get('voiceEnabled') && this.voice.isSupported() && !e.repeat) {
+        $('voiceHud').hidden = false;
+        this.voice.pushToTalkStart();
+      } else if (e.key === 'Escape') {
         if (!$('snapshotModal').hidden) this.closeSnapshot();
         else if (this.pseudoFullscreen) void this.exitRadarFullscreen();
-        else if (!$('settingsDrawer').hidden) {
-          $('settingsDrawer').hidden = true;
-          $('btnSettings').setAttribute('aria-pressed', 'false');
-        } else this.select(null);
+        else if (!$('settingsDrawer').hidden) this.setSettingsDrawerOpen(false);
+        else if (!$('voiceHud').hidden) $('voiceHud').hidden = true;
+        else this.select(null);
       }
+    });
+    document.addEventListener('keyup', (e) => {
+      if ((e.key === 'v' || e.key === 'V') && this.settings.get('voiceEnabled')) this.voice.pushToTalkStop();
     });
 
     // Pause heavy work when hidden; the loop checks document.hidden.
@@ -1185,6 +1333,7 @@ export class App {
     window.addEventListener('beforeunload', () => {
       if (this.recorder.state === 'recording') this.recorder.stop();
       this.camera.stop();
+      this.voice.dispose();
     });
   }
 }

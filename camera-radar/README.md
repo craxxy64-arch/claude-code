@@ -30,6 +30,32 @@ Camera Radar is an installable app (PWA). It opens in its own window, gets a hom
    - **Chrome / Edge (desktop, Android):** the **Install app** button in the toolbar, or the install icon in the address bar.
    - **iPhone / iPad (Safari):** Share → **Add to Home Screen**.
 
+## Xcv — voice control
+
+Camera Radar includes an optional voice assistant, **Xcv**. It is off by
+default. Turn it on in Settings → Voice — Xcv, then either:
+
+- **Hold the mic button** (or press **V**) and say a command — released, it
+  sends that one utterance.
+- Turn on **hands-free** to keep the mic listening continuously for the wake
+  word "Xcv" (e.g. *"Xcv, start recording"*).
+
+Xcv only controls what this app itself can already do — start/stop the
+camera, switch modes, mirror, snapshot, record, heatmap, settings, debug,
+fullscreen radar, select a target by number, set the confidence threshold,
+and a spoken status report built from the app's real live numbers. A page
+running in a browser tab cannot control the operating system or other
+applications, and Xcv does not claim to.
+
+**Speech recognition is not on-device.** In Chrome/Edge, while the mic is
+live, audio is sent to the browser vendor's speech service (not to Camera
+Radar, not uploaded anywhere by this app) to be transcribed. Because of
+that, the mic is off unless you explicitly hold it or opt into hands-free,
+and a red indicator plus the Xcv panel always show when it's listening.
+Speech synthesis (Xcv talking back) runs in the browser and does not leave
+the device. Firefox does not support the Web Speech recognition API; Xcv's
+mic button stays hidden there, and everything else in the app is unaffected.
+
 ## What it does
 
 | Area | Implementation |
@@ -46,6 +72,7 @@ Camera Radar is an installable app (PWA). It opens in its own window, gets a hom
 | Capture | Recording through `MediaRecorder`, with or without overlays, plus a visible REC indicator. Snapshots come with an optional overlay. Nothing is saved until you click Save. |
 | Target panel | Click a target in the camera view, on the radar, or in the list to see live details, movement history, and events. The history can be exported as JSON. |
 | Debug panel | Stream, model, backend, latency, tensor memory, JS heap, skipped frames, and the error/warning log. |
+| Voice (Xcv) | Push-to-talk or hands-free control of the app's own features, plus a spoken status report. Off by default; see above for the privacy trade-off. |
 | Settings | Every option from the brief. Preferences persist in `localStorage`; nothing else is stored. |
 
 Keyboard shortcuts: `1–4` modes · `H` heatmap · `S` snapshot · `R` record · `F` fullscreen radar · `D` debug · `Esc` close.
@@ -107,14 +134,14 @@ No fake versions of these are included.
 ## Tests
 
 ```bash
-npm run test:unit      # tracker, Hungarian, projection, motion analysis, heatmap (node --test)
+npm run test:unit      # tracker, Hungarian, projection, motion analysis, heatmap, voice commands/responses (node --test)
 
 # End-to-end in headless Chromium with a fake camera fed by real photos:
 python3 -m pip install pillow
 curl -LO https://raw.githubusercontent.com/tensorflow/tfjs-models/master/coco-ssd/demo/image1.jpg
 curl -LO https://raw.githubusercontent.com/tensorflow/tfjs-models/master/coco-ssd/demo/image2.jpg
 python3 tests/e2e/make-feed.py image1.jpg image2.jpg tests/e2e/feed.y4m
-npm run test:e2e       # 56 checks, screenshots + report in test-results/
+npm run test:e2e       # 69 checks, screenshots + report in test-results/ (includes Xcv, via a stubbed Web Speech API — no real audio needed)
 ```
 
 The e2e suite covers:
