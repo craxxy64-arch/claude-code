@@ -45,6 +45,7 @@ export class CameraManager extends Emitter<CameraEvents> implements FrameSource 
   private pollTimer = 0;
   private startToken = 0;
   private reconnectTimer = 0;
+  private deniedIsEmbedBlock = false;
 
   constructor(video: HTMLVideoElement) {
     super();
@@ -95,7 +96,37 @@ export class CameraManager extends Emitter<CameraEvents> implements FrameSource 
       measuredFps: this.fps.value(),
       trackState: this.track?.readyState ?? 'none',
       muted: this.track?.muted ?? false,
+      embedBlocked: this.embedBlocked(),
     };
+  }
+
+  /**
+   * True when this page is running inside an iframe that does not grant
+   * camera access (no `allow="camera"`, or a sandbox without it). In that
+   * case getUserMedia fails before any permission prompt, which looks
+   * identical to the user declining — this lets the UI tell them apart.
+   */
+  embedBlocked(): boolean {
+    return this.deniedIsEmbedBlock;
+  }
+
+  /** True when this document is inside a frame (same-origin or cross-origin). */
+  private isFramed(): boolean {
+    try {
+      return window.self !== window.top;
+    } catch {
+      return true; // cross-origin parent: can't compare, but that itself means framed
+    }
+  }
+
+  /** Best-effort check of whether the embedding frame explicitly disallows camera. */
+  private framePolicyDisallowsCamera(): boolean {
+    const policy = (document as Document & { permissionsPolicy?: { allowsFeature(f: string): boolean } }).permissionsPolicy;
+    try {
+      return policy ? !policy.allowsFeature('camera') : false;
+    } catch {
+      return false;
+    }
   }
 
   measuredFps(): number {
@@ -139,6 +170,14 @@ export class CameraManager extends Emitter<CameraEvents> implements FrameSource 
     const token = ++this.startToken;
     this.releaseStream();
     this.requested = { deviceId, width, height };
+
+    if (this.isFramed() && this.framePolicyDisallowsCamera()) {
+      this.deniedIsEmbedBlock = true;
+      this.setState('denied', 'This page is embedded in a frame that blocks camera access (no camera permission granted to the embed). Open the site directly in its own browser tab, or use "Open video" instead.');
+      logger.warn('camera', 'Skipped getUserMedia: page is framed without camera permission');
+      return false;
+    }
+
     this.setState('requesting', 'Waiting for camera permission…');
 
     const video: MediaTrackConstraints = {
@@ -198,6 +237,7 @@ export class CameraManager extends Emitter<CameraEvents> implements FrameSource 
     this.startFrameCounter();
     const s = this.track.getSettings();
     logger.info('camera', `Live: ${this.track.label || 'camera'} ${this.width}×${this.height} @ ${s.frameRate ?? '?'} fps`);
+    this.deniedIsEmbedBlock = false;
     this.setState('live', `${this.track.label || 'Camera'} live`);
     // Labels become available after permission is granted.
     void this.refreshDevices();
@@ -271,7 +311,15 @@ export class CameraManager extends Emitter<CameraEvents> implements FrameSource 
     switch (name) {
       case 'NotAllowedError':
       case 'SecurityError':
-        this.setState('denied', 'Camera permission denied. Allow camera access in the browser address bar and press Start — or open a video file instead.');
+        // A permission prompt requires the frame's own policy to allow the feature first, so a
+        // NotAllowedError while framed — even when the policy API can't confirm it — is far more
+        // likely an embedding block than the user having actively declined a prompt they never saw.
+        this.deniedIsEmbedBlock = this.isFramed();
+        if (this.deniedIsEmbedBlock) {
+          this.setState('denied', 'This page is embedded in a frame that blocks camera access (no camera permission granted to the embed). Open the site directly in its own browser tab, or use "Open video" instead.');
+        } else {
+          this.setState('denied', 'Camera permission denied. Allow camera access in the browser address bar and press Start — or open a video file instead.');
+        }
         break;
       case 'NotFoundError':
       case 'OverconstrainedError':

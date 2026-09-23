@@ -2239,3 +2239,11 @@ body {
     display: none;
   }
 }
+
+a.btn {
+  text-decoration: none;
+  color: inherit;
+}
+a.btn.btn-primary {
+  color: var(--accent-ink);
+}

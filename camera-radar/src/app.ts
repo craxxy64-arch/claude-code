@@ -666,7 +666,11 @@ export class App {
       this.pushEvent({ at: Date.now(), type: 'system', text: 'Camera disconnected' });
       toast('Camera disconnected. It will resume automatically when reconnected.', 'warn', 6000);
     }
-    if (['denied', 'not-found', 'busy', 'error'].includes(info.state)) toast(info.message, 'alert', 7000);
+    if (info.state === 'denied' && info.embedBlocked) {
+      toast('Camera is blocked because this page is embedded. Use "Open in new tab" to use the camera.', 'warn', 9000);
+    } else if (['denied', 'not-found', 'busy', 'error'].includes(info.state)) {
+      toast(info.message, 'alert', 7000);
+    }
     this.updateEmptyState();
   }
 
@@ -683,7 +687,7 @@ export class App {
       idle: 'Camera is off',
       stopped: 'Camera is off',
       requesting: 'Requesting camera…',
-      denied: 'Permission denied',
+      denied: info.embedBlocked ? 'Camera blocked in this embed' : 'Permission denied',
       'not-found': 'No camera found',
       busy: 'Camera unavailable',
       disconnected: 'Camera disconnected',
@@ -691,7 +695,18 @@ export class App {
       error: 'Camera error',
     };
     title.textContent = titles[info.state] ?? 'Camera';
-    el.dataset.tone = ['denied', 'not-found', 'busy', 'error', 'unsupported'].includes(info.state) ? 'alert' : info.state === 'disconnected' ? 'warn' : '';
+    el.dataset.tone = info.state === 'denied' && info.embedBlocked
+      ? 'warn'
+      : ['denied', 'not-found', 'busy', 'error', 'unsupported'].includes(info.state)
+        ? 'alert'
+        : info.state === 'disconnected'
+          ? 'warn'
+          : '';
+    const openTab = $<HTMLAnchorElement>('btnOpenTab');
+    const blocked = info.state === 'denied' && info.embedBlocked;
+    openTab.hidden = !blocked;
+    if (blocked) openTab.href = location.href;
+    btn.hidden = btn.hidden || blocked;
     let text = info.state === 'idle' || info.state === 'stopped'
       ? 'Start the camera to begin detection and tracking. Frames are processed locally in this browser and never uploaded.'
       : info.message;

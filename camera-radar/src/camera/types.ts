@@ -35,6 +35,8 @@ export interface CameraInfo {
   measuredFps: number;
   trackState: MediaStreamTrackState | 'none';
   muted: boolean;
+  /** True when the page is embedded in a frame that does not grant camera access. */
+  embedBlocked: boolean;
 }
 
 /**
