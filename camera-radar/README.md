@@ -62,13 +62,14 @@ mic button stays hidden there, and everything else in the app is unaffected.
 |---|---|
 | Camera | `getUserMedia` with device enumeration and selection (built-in or USB). Resolutions are filtered by the camera's reported capabilities. Mirror toggle. Detects disconnects (`track.ended`) and reconnects automatically on `devicechange`. Real FPS is measured with `requestVideoFrameCallback`. |
 | Detection | TensorFlow.js COCO-SSD (80 classes: people, phones, laptops, chairs, tables, bottles, bags, animals and more) runs in a **Web Worker**. Backend order is WebGL → WASM → CPU, and software-emulated WebGL is detected and skipped. If workers are unavailable it falls back to the main thread. You can choose from 3 models. |
-| Tracking | SORT-style tracker: Hungarian assignment on IoU + centre distance, a per-target alpha–beta filter, coasting through short dropouts, re-identification of targets that come back, and label voting so class flicker doesn't split IDs. |
+| Tracking | SORT-style tracker: Hungarian assignment on IoU + centre distance, a per-target alpha–beta filter, coasting through short dropouts, re-identification of targets that come back, and label voting so class flicker doesn't split IDs. **Appearance matching**: each target keeps a colour signature sampled from the exact frame the detector saw, so two same-class targets that cross keep their own IDs, and a returning target can get its ID back after up to 8 s if it looks the same. **Parked targets**: an object that has been still for 1.5 s keeps its place and ID (up to 6 s hidden) while something passes in front of it, instead of its ID being carried off by the passer-by; something walking straight at the camera (box grows in proportion) is still followed. The matching range also widens with time since a target was last seen, so a quick move doesn't cost it its ID when detection runs slowly (e.g. 3/s on a CPU); one very fast reading is enough to flag sudden movement. Tuned and regression-tested against recorded detector output from real footage (`tests/unit/fixtures/`). |
 | Movement | Direction (8-point compass), speed in **image px/s**, moving/stationary with hysteresis, sudden-movement detection, entry and exit edges, trails, previous and current positions, and velocity vectors. |
 | Motion layer | Frame differencing on a 160-px grayscale copy, connected-component regions, small/large/sudden/whole-scene classification, enter/leave events, and adjustable sensitivity. |
 | Heatmap | Sliding-window accumulator (10 s – 10 min) with a recent-motion highlight, hotspot zone, history sparkline, and a reset button. |
-| Radar | Sector display with the camera at the apex. **Bearing** comes from the pinhole model and the configured FOV. **Range is an estimate** and is labelled that way everywhere. |
+| Radar | Sector display with the camera at the apex. **Bearing** comes from the pinhole model and the configured FOV. **Range is an estimate** and is labelled that way everywhere, with a ± error bar per target. From each target's recent history the radar fits whether it is **closing, moving away or crossing** (with an estimated m/s and, when closing, roughly when it would reach the camera), draws a dotted **projected path** 1.5 s ahead, and shows the **closest target**. Targets hidden behind something are shown at their last position ("last seen 2 s ago"); partly covered targets hold their last good distance instead of reading a shrunken box as "moving away". |
 | Modes | A camera · B radar · C split · D split + analytics (keys 1–4). Switching is instant. |
 | Analytics | UI/camera/processing FPS, resolution, objects, people, moving/stationary, tracked now and total, average confidence, detection latency, inference time, and tracking time. |
+| Camera overlay | Tracking boxes are drawn in green for every target; the label keeps the class colour. |
 | Capture | Recording through `MediaRecorder`, with or without overlays, plus a visible REC indicator. Snapshots come with an optional overlay. Nothing is saved until you click Save. |
 | Target panel | Click a target in the camera view, on the radar, or in the list to see live details, movement history, and events. The history can be exported as JSON. |
 | Debug panel | Stream, model, backend, latency, tensor memory, JS heap, skipped frames, and the error/warning log. |
@@ -141,7 +142,7 @@ python3 -m pip install pillow
 curl -LO https://raw.githubusercontent.com/tensorflow/tfjs-models/master/coco-ssd/demo/image1.jpg
 curl -LO https://raw.githubusercontent.com/tensorflow/tfjs-models/master/coco-ssd/demo/image2.jpg
 python3 tests/e2e/make-feed.py image1.jpg image2.jpg tests/e2e/feed.y4m
-npm run test:e2e       # 69 checks, screenshots + report in test-results/ (includes Xcv, via a stubbed Web Speech API — no real audio needed)
+npm run test:e2e       # 71 checks, screenshots + report in test-results/ (includes Xcv, via a stubbed Web Speech API — no real audio needed)
 ```
 
 The e2e suite covers:

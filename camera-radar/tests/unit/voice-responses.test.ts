@@ -66,3 +66,9 @@ test('every intent produces non-empty speech', () => {
   ];
   for (const intent of intents) assert.ok(speakFor(intent, { ok: true }).length > 0, JSON.stringify(intent));
 });
+
+test('status report names the closest target and when it will reach the camera', () => {
+  const text = describeStatus(status({ closest: { id: 2, label: 'dog', range: 2.4, trend: 'closing', timeToReach: 4.2 }, hidden: 1 }));
+  assert.match(text, /Closest is dog 2, about 2\.4 metres, estimated, closing — reaches the camera in about 4 seconds/);
+  assert.match(text, /1 target is hidden/);
+});

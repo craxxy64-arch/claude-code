@@ -1,4 +1,5 @@
 import { colorFor } from '../detection/categories.ts';
+import { TREND_LABEL } from '../radar/kinematics.ts';
 import type { RadarBlip } from '../radar/RadarRenderer.ts';
 import type { Track } from '../tracking/types.ts';
 import { escapeHtml, fitCanvas } from './dom.ts';
@@ -118,7 +119,12 @@ export class TargetPanel {
     this.set('entered', t.enteredFrom === 'inside' ? 'in view' : `from ${t.enteredFrom}`);
     this.set('seen', formatClock(args.epochOffset + t.lastSeen * 1000));
     this.set('bearing', est ? `${est.bearing >= 0 ? '+' : ''}${est.bearing.toFixed(1)}°` : '—');
-    this.set('range', est ? `~${est.range.toFixed(1)} m` : '—');
+    const blip = args.blip;
+    const trend =
+      blip?.motion && blip.motion.trend !== 'steady'
+        ? ` · ${TREND_LABEL[blip.motion.trend].toLowerCase()}${blip.motion.trend !== 'crossing' ? ` ${Math.abs(blip.motion.rangeRate).toFixed(1)} m/s` : ''}`
+        : '';
+    this.set('range', blip ? `~${blip.range.toFixed(1)} ±${(blip.range * blip.uncertainty).toFixed(1)} m${trend}` : '—');
     this.set(
       'note',
       est && est.measured

@@ -38,4 +38,8 @@ export interface VoiceStatusSnapshot {
   processingFps: number;
   motionLevel: string;
   recording: boolean;
+  /** Nearest visible target on the radar (distance is an estimate). */
+  closest?: { id: number; label: string; range: number; trend: 'closing' | 'away' | 'crossing' | 'steady'; timeToReach: number | null } | null;
+  /** Targets currently hidden behind something. */
+  hidden?: number;
 }

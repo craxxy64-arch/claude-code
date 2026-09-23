@@ -6,6 +6,9 @@ import { MONO } from '../utils/fonts.ts';
 import { formatId } from '../utils/format.ts';
 import { compassArrow, compassFromVelocity, compassWord } from '../utils/math.ts';
 
+/** Colour of every tracking box on the camera view. */
+export const TRACK_BOX_GREEN = '#22ff6a';
+
 export interface OverlayOptions {
   showBoxes: boolean;
   showIds: boolean;
@@ -104,24 +107,32 @@ export class OverlayRenderer {
         ctx.globalAlpha = 1;
       }
 
-      // Box.
+      // Box — always green, whatever the object class (class colour stays on the label).
       if (opts.showBoxes) {
-        ctx.globalAlpha = lost ? 0.45 : 1;
-        ctx.strokeStyle = color;
-        ctx.lineWidth = S(selected ? 1.6 : 1);
-        ctx.setLineDash(lost ? [S(4), S(4)] : []);
-        ctx.globalAlpha = lost ? 0.35 : 0.35;
+        ctx.save();
+        ctx.strokeStyle = TRACK_BOX_GREEN;
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.55)';
+        ctx.shadowBlur = S(3);
+        ctx.lineWidth = S(selected ? 2 : 1.4);
+        ctx.setLineDash(lost ? [S(5), S(4)] : []);
+        ctx.globalAlpha = lost ? 0.5 : 0.9;
         ctx.strokeRect(bx, by, bw, bh);
         ctx.setLineDash([]);
-        ctx.globalAlpha = lost ? 0.5 : 1;
-        ctx.lineWidth = S(selected ? 3 : 2);
-        const c = Math.min(S(16), bw / 3, bh / 3);
+        ctx.globalAlpha = lost ? 0.55 : 1;
+        ctx.lineWidth = S(selected ? 4 : 3);
+        const c = Math.min(S(18), bw / 3, bh / 3);
         ctx.beginPath();
         ctx.moveTo(bx, by + c); ctx.lineTo(bx, by); ctx.lineTo(bx + c, by);
         ctx.moveTo(bx + bw - c, by); ctx.lineTo(bx + bw, by); ctx.lineTo(bx + bw, by + c);
         ctx.moveTo(bx + bw, by + bh - c); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw - c, by + bh);
         ctx.moveTo(bx + c, by + bh); ctx.lineTo(bx, by + bh); ctx.lineTo(bx, by + bh - c);
         ctx.stroke();
+        if (selected) {
+          ctx.globalAlpha = 0.12;
+          ctx.fillStyle = TRACK_BOX_GREEN;
+          ctx.fillRect(bx, by, bw, bh);
+        }
+        ctx.restore();
         if (frame.now - tr.suddenAt < 1.2 && Math.floor(frame.now * 6) % 2 === 0) {
           ctx.strokeStyle = '#ff5d5d';
           ctx.lineWidth = S(2);
@@ -187,8 +198,8 @@ export class OverlayRenderer {
         ctx.globalAlpha = lost ? 0.6 : 0.92;
         ctx.fillStyle = 'rgba(6,10,14,0.82)';
         ctx.fillRect(lx, ly, cw, ch);
-        ctx.fillStyle = color;
-        ctx.fillRect(lx, ly, S(2), ch);
+        ctx.fillStyle = TRACK_BOX_GREEN;
+        ctx.fillRect(lx, ly, S(3), ch);
         ctx.globalAlpha = 1;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';

@@ -122,3 +122,39 @@ test('does not steal a distant detection of the same class', () => {
   const original = tr.getTracks().find((t) => t.id === id)!;
   assert.ok(Math.abs(original.x - 0.85) < 0.05, `original stays at 0.85, got ${original.x}`);
 });
+
+
+test('a person standing still who then walks straight at the camera keeps their ID', () => {
+  // Head-on approach: the box centre barely moves but the box grows in proportion.
+  const tr = new Tracker({ frameWidth: 1000, frameHeight: 1000 });
+  let t = 0;
+  for (let i = 0; i < 30; i++, t += 0.1) tr.update([det('person', 0.5, 0.5, 0.1, 0.3)], t); // standing 3 s
+  const id = tr.getTracks()[0].id;
+  let s = 1;
+  for (let i = 0; i < 15; i++, t += 0.1) {
+    s *= 1.06; // ~2.4× bigger over 1.5 s — walking toward the camera
+    tr.update([det('person', 0.5, 0.5 + (s - 1) * 0.05, 0.1 * s, 0.3 * s)], t);
+  }
+  const tracks = tr.getTracks();
+  assert.equal(tracks.length, 1, `tracks: ${tracks.map((x) => x.id).join(',')}`);
+  assert.equal(tracks[0].id, id);
+  assert.ok(tracks[0].h > 0.5, 'track grew with the person');
+});
+
+test('a lunge caught by a single detection (low detection rate) is still flagged as sudden', () => {
+  // ~3 detections/s: the lunge only lands in one reading.
+  const tr = new Tracker({ frameWidth: 1000, frameHeight: 1000 });
+  const ev = collect(tr);
+  let t = 0;
+  for (let i = 0; i < 12; i++, t += 0.3) tr.update([det('person', 0.3, 0.5)], t);
+  tr.update([det('person', 0.55, 0.5)], t); // 0.25 frame widths in 0.3 s
+  assert.ok(ev.some((e) => e.type === 'sudden'), 'sudden event from one decisive reading');
+});
+
+test('a small jitter at low detection rate is not flagged as sudden', () => {
+  const tr = new Tracker({ frameWidth: 1000, frameHeight: 1000 });
+  const ev = collect(tr);
+  let t = 0;
+  for (let i = 0; i < 12; i++, t += 0.3) tr.update([det('person', 0.3 + (i % 2) * 0.01, 0.5)], t);
+  assert.ok(!ev.some((e) => e.type === 'sudden'));
+});

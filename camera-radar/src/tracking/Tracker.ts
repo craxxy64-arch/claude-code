@@ -1,5 +1,6 @@
 import { Emitter } from '../utils/emitter.ts';
 import { clamp, iou, lerp, type Box } from '../utils/math.ts';
+import { blendSignature, similarity } from './appearance.ts';
 import { hungarian } from './hungarian.ts';
 import type { Edge, MeasuredObject, Track, TrackEvent } from './types.ts';
 
@@ -19,6 +20,10 @@ export interface TrackerConfig {
   frameHeight: number;
   /** Allow a detection of another class to continue a track (penalised). */
   crossClassPenalty: number;
+  /** Re-ID window for targets whose appearance matches strongly (longer than reidSec). */
+  appearanceReidSec: number;
+  /** How long a settled (parked) target is kept while something passes in front of it. */
+  settledLostSec: number;
 }
 
 export const DEFAULT_TRACKER_CONFIG: TrackerConfig = {
@@ -30,10 +35,18 @@ export const DEFAULT_TRACKER_CONFIG: TrackerConfig = {
   frameWidth: 1280,
   frameHeight: 720,
   crossClassPenalty: 0.35,
+  appearanceReidSec: 8,
+  settledLostSec: 6,
 };
 
 const EDGE_MARGIN = 0.035;
 const MAX_COST = 0.9;
+/** How much colour similarity counts in the assignment cost. */
+const APPEARANCE_WEIGHT = 0.35;
+/** Signatures needed before a track's appearance is trusted to veto a match. */
+const APPEARANCE_MIN_SAMPLES = 3;
+/** A target still for this long (seconds) is treated as parked. */
+const SETTLE_SEC = 1.5;
 
 /**
  * Multi-target tracker: SORT-style association (Hungarian on IoU + centre
@@ -106,7 +119,7 @@ export class Tracker extends Emitter<{ event: TrackEvent }> {
 
     // 2. Cost matrix.
     const cost = this.tracks.map((tr, i) =>
-      measurements.map((m) => this.cost(tr, predicted[i], m, aspect)),
+      measurements.map((m) => this.cost(tr, predicted[i], m, aspect, t)),
     );
     const assignment = hungarian(cost);
     const usedMeas = new Set<number>();
@@ -127,7 +140,8 @@ export class Tracker extends Emitter<{ event: TrackEvent }> {
     for (const tr of this.tracks) {
       const lostFor = t - tr.lastSeen;
       if (tr.status === 'tentative' && tr.misses >= 2) continue;
-      if (tr.status === 'lost' && lostFor > this.config.maxLostSec) {
+      const lostLimit = this.isSettled(tr, tr.lastSeen) ? Math.max(this.config.maxLostSec, this.config.settledLostSec) : this.config.maxLostSec;
+      if (tr.status === 'lost' && lostFor > lostLimit) {
         tr.exitedVia = this.edgeOf(tr);
         const where = tr.exitedVia === 'inside' ? 'lost inside frame (occluded or undetected)' : `left via ${tr.exitedVia.toUpperCase()} edge`;
         events.push({ type: 'exit', t, track: tr, detail: where });
@@ -137,7 +151,8 @@ export class Tracker extends Emitter<{ event: TrackEvent }> {
       alive.push(tr);
     }
     this.tracks = alive;
-    this.graveyard = this.graveyard.filter((g) => t - g.lastSeen < this.config.reidSec);
+    const keep = Math.max(this.config.reidSec, this.config.appearanceReidSec);
+    this.graveyard = this.graveyard.filter((g) => t - g.lastSeen < (g.appearance ? keep : this.config.reidSec));
 
     // 5. Unmatched measurements: re-identify or spawn.
     measurements.forEach((m, j) => {
@@ -168,6 +183,11 @@ export class Tracker extends Emitter<{ event: TrackEvent }> {
   }
 
   // ------------------------------------------------------------------------
+  /** True for a confirmed target that has been stationary for a while. */
+  private isSettled(tr: Track, t: number): boolean {
+    return tr.status !== 'tentative' && tr.movement === 'stationary' && tr.stillSince != null && t - tr.stillSince >= SETTLE_SEC && tr.hits >= 8;
+  }
+
   private predictBox(tr: Track, t: number): Box {
     const dt = clamp(t - tr.lastUpdate, 0, 0.5);
     const cx = tr.x + tr.vx * dt;
@@ -175,7 +195,7 @@ export class Tracker extends Emitter<{ event: TrackEvent }> {
     return { x: cx - tr.w / 2, y: cy - tr.h / 2, w: tr.w, h: tr.h };
   }
 
-  private cost(tr: Track, pred: Box, m: MeasuredObject, aspect: number): number {
+  private cost(tr: Track, pred: Box, m: MeasuredObject, aspect: number, t: number): number {
     const overlap = iou(pred, m.box);
     const mcx = m.box.x + m.box.w / 2;
     const mcy = m.box.y + m.box.h / 2;
@@ -188,11 +208,37 @@ export class Tracker extends Emitter<{ event: TrackEvent }> {
     // (prediction already moved the box along its velocity).
     const size = Math.max(Math.hypot(tr.w * aspect, tr.h), 0.05);
     const speed = Math.hypot(tr.vx * aspect, tr.vy);
-    const gate = size * 0.4 + 0.03 + speed * 0.15 + Math.min(2, tr.misses) * 0.02;
+    const sim = tr.appearance && m.appearance ? similarity(tr.appearance, m.appearance) : null;
+    const trusted = sim != null && tr.appearanceSamples >= APPEARANCE_MIN_SAMPLES;
+    // The longer since we last saw it, the further it can plausibly have gone — this
+    // keeps IDs through quick moves when the detector runs slowly (e.g. 3/s on a CPU).
+    const sinceSeen = Math.min(0.5, Math.max(0, t - tr.lastSeen));
+    let gate = size * 0.4 + 0.03 + speed * 0.15 + Math.min(2, tr.misses) * 0.02 + 0.5 * sinceSeen;
+    // A target that clearly looks the same can be re-acquired a bit further away
+    // (it moved while occluded); one that clearly looks different gets a tighter gate.
+    if (trusted && sim > 0.75 && tr.misses > 0) gate *= 1.6;
+    if (trusted && sim < 0.25) gate *= 0.6;
+    // Re-acquiring a target after a gap: it has to look like the same thing.
+    if (trusted && sim < 0.2 && tr.misses > 0) return 1e3;
     if (overlap < 0.01 && dist > gate) return 1e3;
     const proximity = Math.max(0, 1 - dist / gate);
     const sizeRatio = Math.min(m.box.w * m.box.h, tr.w * tr.h) / Math.max(m.box.w * m.box.h, tr.w * tr.h, 1e-6);
+    // A parked object doesn't suddenly grow, shrink, or turn into a bigger object of another
+    // class. A detection like that over it is something passing in front (the detector often
+    // merges both into one box) — leave the parked target coasting in place instead of letting
+    // the passer-by carry its ID away. Sudden *movement* at the same size is still followed.
+    if (tr.anchor && this.isSettled(tr, tr.lastUpdate)) {
+      const a = tr.anchor.w * tr.anchor.h;
+      const b = m.box.w * m.box.h;
+      const anchorRatio = Math.min(a, b) / Math.max(a, b, 1e-6);
+      // Shape change: a merged box grows mostly sideways. Something walking straight
+      // at the camera grows in proportion (same shape), which is still followed.
+      const shapeChange = Math.abs(Math.log((m.box.w / Math.max(m.box.h, 1e-6)) / (tr.anchor.w / Math.max(tr.anchor.h, 1e-6))));
+      if (anchorRatio < 0.8 && shapeChange > Math.log(1.35)) return 1e3;
+      if (m.label !== tr.label && anchorRatio < 0.85) return 1e3;
+    }
     let c = 1 - (0.5 * overlap + 0.35 * proximity + 0.15 * sizeRatio);
+    if (sim != null) c += APPEARANCE_WEIGHT * (trusted ? 1 : 0.5) * (1 - sim);
     if (m.label !== tr.label) {
       if (overlap < 0.5) return 1e3;
       c += this.config.crossClassPenalty;
@@ -240,7 +286,10 @@ export class Tracker extends Emitter<{ event: TrackEvent }> {
       const limit = Math.max(this.moveThreshold * this.suddenFactor, tr.paceBaseline * 3);
       tr.suddenStreak = raw > limit ? tr.suddenStreak + 1 : 0;
       tr.paceBaseline += 0.12 * (Math.min(raw, 4) - tr.paceBaseline);
-      if (tr.suddenStreak >= 2 && tr.status !== 'tentative' && t - tr.suddenAt > 1.5) {
+      // Two fast readings in a row, or one very fast one — at low detection rates a
+      // half-second lunge may only land in a single detection.
+      const decisive = raw > limit * 1.8 && tr.hits > 5;
+      if ((tr.suddenStreak >= 2 || decisive) && tr.status !== 'tentative' && t - tr.suddenAt > 1.5) {
         tr.suddenAt = t;
         tr.suddenStreak = 0;
         events.push({ type: 'sudden', t, track: tr, detail: `sudden movement (${Math.round(raw * W)} px/s)` });
@@ -255,9 +304,13 @@ export class Tracker extends Emitter<{ event: TrackEvent }> {
     const wasMoving = tr.movement === 'moving';
     if (!wasMoving && speedNorm > this.moveThreshold) {
       tr.movement = 'moving';
+      tr.stillSince = null;
+      tr.anchor = null;
       if (tr.status === 'active') events.push({ type: 'start-moving', t, track: tr, detail: 'started moving' });
     } else if (wasMoving && speedNorm < this.moveThreshold * 0.55) {
       tr.movement = 'stationary';
+      tr.stillSince = t;
+      tr.anchor = { w: tr.w, h: tr.h };
       if (tr.status === 'active') events.push({ type: 'stopped', t, track: tr, detail: 'became stationary' });
     }
 
@@ -275,6 +328,15 @@ export class Tracker extends Emitter<{ event: TrackEvent }> {
 
     tr.score = m.score;
     tr.avgScore = tr.hits === 0 ? m.score : tr.avgScore + 0.15 * (m.score - tr.avgScore);
+    if (m.appearance) {
+      // Adapt slowly so a brief overlap with another object doesn't overwrite who this is.
+      tr.appearance = tr.appearance ? blendSignature(tr.appearance, m.appearance, tr.appearanceSamples < 5 ? 0.4 : 0.12) : m.appearance.slice();
+      tr.appearanceSamples++;
+    }
+    if (tr.anchor && tr.movement === 'stationary') {
+      tr.anchor.w += 0.05 * (m.box.w - tr.anchor.w);
+      tr.anchor.h += 0.05 * (m.box.h - tr.anchor.h);
+    }
     tr.hits++;
     tr.misses = 0;
     tr.lastSeen = t;
@@ -314,13 +376,22 @@ export class Tracker extends Emitter<{ event: TrackEvent }> {
     const mcy = m.box.y + m.box.h / 2;
     for (const g of this.graveyard) {
       if (g.label !== m.label) continue;
-      // Targets that walked out of frame come back through an edge, anywhere along it.
       const gap = t - g.lastSeen;
-      const reach = 0.12 + Math.hypot(g.vx * aspect, g.vy) * Math.min(gap, 1.5) + Math.max(g.w * aspect, g.h) * 0.5;
+      const sim = g.appearance && m.appearance && g.appearanceSamples >= APPEARANCE_MIN_SAMPLES ? similarity(g.appearance, m.appearance) : null;
+      // Beyond the normal window, only a strong appearance match may bring an ID back.
+      if (gap >= this.config.reidSec && !(sim != null && sim > 0.8)) continue;
+      // A clearly different-looking object is not the same target, wherever it appears.
+      if (sim != null && sim < 0.3) continue;
+      // Targets that walked out of frame come back through an edge, anywhere along it.
+      let reach = 0.12 + Math.hypot(g.vx * aspect, g.vy) * Math.min(gap, 1.5) + Math.max(g.w * aspect, g.h) * 0.5;
+      if (sim != null && sim > 0.8) reach *= 1.5;
       const d = Math.hypot((mcx - g.x) * aspect, mcy - g.y);
-      if (d < reach && d < bestD) {
+      if (d >= reach) continue;
+      // Rank by distance, discounted by how alike the two look.
+      const score = d / reach - (sim ?? 0.5) * 0.5;
+      if (score < bestD) {
         best = g;
-        bestD = d;
+        bestD = score;
       }
     }
     if (best) {
@@ -360,6 +431,10 @@ export class Tracker extends Emitter<{ event: TrackEvent }> {
       lastMeas: null,
       suddenStreak: 0,
       paceBaseline: 0,
+      stillSince: t,
+      anchor: { w: m.box.w, h: m.box.h },
+      appearance: null,
+      appearanceSamples: 0,
       meta: {},
     };
   }

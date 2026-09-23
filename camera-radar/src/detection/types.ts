@@ -6,6 +6,8 @@ export interface Detection {
   score: number;
   /** Normalised box in *view space* (mirrored if the view is mirrored). */
   box: Box;
+  /** Colour signature of the object, used by the tracker to tell targets apart. */
+  appearance?: Float32Array | null;
 }
 
 export interface RawDetection {

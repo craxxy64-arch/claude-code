@@ -22,6 +22,15 @@ export function describeStatus(s: VoiceStatusSnapshot): string {
       : `Detection model is ${s.modelStatus}.`,
   );
   parts.push(`Processing at ${s.processingFps.toFixed(1)} frames per second.`);
+  if (s.closest) {
+    const c = s.closest;
+    let line = `Closest is ${c.label} ${c.id}, about ${c.range.toFixed(1)} metres, estimated`;
+    if (c.trend === 'closing') line += c.timeToReach != null && c.timeToReach < 30 ? `, closing — reaches the camera in about ${Math.round(c.timeToReach)} seconds` : ', closing';
+    else if (c.trend === 'away') line += ', moving away';
+    else if (c.trend === 'crossing') line += ', crossing';
+    parts.push(`${line}.`);
+  }
+  if (s.hidden) parts.push(`${s.hidden} target${s.hidden === 1 ? ' is' : 's are'} hidden behind something.`);
   if (s.motionLevel !== 'none') parts.push(`Motion level ${s.motionLevel}.`);
   if (s.recording) parts.push('Recording is active.');
   return parts.join(' ');

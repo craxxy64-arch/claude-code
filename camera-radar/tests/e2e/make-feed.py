@@ -4,7 +4,7 @@ Real photographs (COCO-SSD demo images from tensorflow/tfjs-models) are cut into
 sprites and animated so the detector sees genuine objects moving:
   * a beagle that enters from the LEFT, walks right and leaves via the RIGHT
   * a beagle that stays still (stationary target)
-  * a person walking slowly left, then making a sudden fast move
+  * a person walking slowly left, then making a sudden fast lunge (~480 px/s)
 Usage: python make-feed.py <image1.jpg> <image2.jpg> <out.y4m>
 """
 import math
@@ -45,10 +45,12 @@ with open(out, "wb") as f:
         frame.paste(dog_static, (18, 250))
         # Person: slow drift left, sudden jump right at frames 170-178.
         px = 470 - i * 0.9
-        if 170 <= i < 178:
-            px += (i - 170) * 22
-        elif i >= 178:
-            px += 8 * 22 - (i - 178) * 0.9
+        # Sudden lunge: 32 px/frame for 6 frames (~480 px/s at 15 fps) — clearly
+        # above the tracker's sudden-movement threshold, not a borderline case.
+        if 170 <= i < 176:
+            px += (i - 170) * 32
+        elif i >= 176:
+            px += 6 * 32 - (i - 176) * 0.9
         py = 150 + 6 * math.sin(i / 12)
         frame.paste(person, (int(px), int(py)))
         # Walking dog: enters from the left, leaves to the right.

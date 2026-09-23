@@ -99,7 +99,7 @@ try {
     maxTracks = Math.max(maxTracks, s.tracks.filter((t) => t.status === 'active').length);
     const mv = s.tracks.find((t) => t.movement === 'moving' && t.status === 'active');
     if (mv && !sawMoving) sawMoving = mv;
-    idSamples.push(s.tracks.map((t) => `${t.id}:${t.label}:${t.x.toFixed(2)}`));
+    idSamples.push(s.tracks.map((t) => `${t.id}:${t.label}:${t.x.toFixed(2)}:${t.movement}`));
     const ids = s.tracks.map((t) => t.id).sort().join(',');
     const bids = s.blips.map((b) => b.id).sort().join(',');
     if (ids !== bids) radarSynced = false;
@@ -111,12 +111,24 @@ try {
   check('Movement detected with px/s speed', !!sawMoving, sawMoving ? `#${sawMoving.id} ${sawMoving.label} ${Math.round(sawMoving.speed)} px/s` : '');
   check('Radar blips match tracked IDs every sample', radarSynced);
   check('Radar range labelled as estimate', s.blips.every((b) => b.quality !== 'measured'));
+  const radarKnows = await page.evaluate(() => window.cameraRadar.radar.blips.map((b) => ({ u: b.uncertainty, trend: b.motion?.trend ?? null, hidden: b.hiddenFor, partly: b.partlyHidden })));
+  check('Radar shows a distance uncertainty for every target', radarKnows.length > 0 && radarKnows.every((b) => b.u > 0), radarKnows.map((b) => `±${Math.round(b.u * 100)}%`).join(', '));
+  const boxColour = await page.evaluate(() => {
+    const c = document.getElementById('overlay');
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let green = 0;
+    for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 200 && d[i + 1] > 200 && d[i] < 90 && d[i + 2] < 150) green++;
+    return green;
+  });
+  check('Tracking boxes are drawn in green', boxColour > 200, `${boxColour} bright-green pixels`);
 
   // Stationary dog (right side in mirrored view) should keep one ID.
-  const staticIds = idSamples.map((row) => row.find((r) => Number(r.split(':')[2]) > 0.8)?.split(':')[0]).filter(Boolean);
+  const staticIds = idSamples.map((row) => row.find((r) => Number(r.split(':')[2]) > 0.8 && r.endsWith(':stationary'))?.split(':')[0]).filter(Boolean);
   const dominant = staticIds.sort((a, b) => staticIds.filter((x) => x === a).length - staticIds.filter((x) => x === b).length).pop();
   const share = staticIds.filter((x) => x === dominant).length / Math.max(1, staticIds.length);
-  check('Stationary target keeps a persistent ID', share >= 0.7, `ID ${dominant} in ${Math.round(share * 100)}% of samples`);
+  // Only count samples where the target at the sitting dog's spot is stationary — the
+  // walking dog passes through that area and is a different, correctly-IDed target.
+  check('Stationary target keeps a persistent ID (even while another dog walks in front of it)', share >= 0.95, `ID ${dominant} in ${Math.round(share * 100)}% of ${staticIds.length} samples`);
 
   const types = new Set(s.events.map((e) => e.type));
   check('Target ENTER events', types.has('enter'), [...labels].join(', '));

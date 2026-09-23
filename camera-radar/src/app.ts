@@ -5,10 +5,12 @@ import { DetectorClient } from './detection/DetectorClient.ts';
 import type { Detection } from './detection/types.ts';
 import { extensions } from './extensions/capabilities.ts';
 import { MotionDetector, type MotionEvent } from './motion/MotionDetector.ts';
+import { TREND_ARROW, TREND_LABEL } from './radar/kinematics.ts';
 import { RadarRenderer } from './radar/RadarRenderer.ts';
 import { Recorder, recordingFilename, type Recording } from './recording/Recorder.ts';
 import { canvasToBlob, captureFrame, downloadBlob, timestampName } from './recording/snapshot.ts';
 import { SettingsStore, type LayoutMode, type Settings } from './settings/Settings.ts';
+import { FrameSampler } from './tracking/frameSampler.ts';
 import { Tracker } from './tracking/Tracker.ts';
 import type { Track, TrackEvent } from './tracking/types.ts';
 import { AnalyticsPanel, drawSparkline, type LoggedEvent } from './ui/AnalyticsPanel.ts';
@@ -48,6 +50,7 @@ export class App {
   readonly camera: CameraManager;
   readonly detector = new DetectorClient();
   readonly tracker = new Tracker();
+  private readonly sampler = new FrameSampler();
   readonly motion = new MotionDetector();
   readonly analytics = new Analytics();
   readonly recorder = new Recorder();
@@ -149,6 +152,11 @@ export class App {
       processingFps: this.analytics.processing.value(),
       motionLevel: this.motion.last?.level ?? 'none',
       recording: this.recorder.state === 'recording',
+      closest: (() => {
+        const b = this.radar.blips.filter((x) => x.hiddenFor == null).sort((a, c) => a.range - c.range)[0];
+        return b ? { id: b.id, label: b.label, range: b.range, trend: b.motion?.trend ?? 'steady', timeToReach: b.motion?.timeToReach ?? null } : null;
+      })(),
+      hidden: this.radar.blips.filter((x) => x.hiddenFor != null).length,
     };
   }
 
@@ -327,6 +335,13 @@ export class App {
     try {
       const frame = await this.grabFrame(video, iw, ih);
       const captured = performance.now();
+      // Keep a small copy of this exact frame for appearance signatures (the bitmap
+      // itself is handed to the worker and is gone after detect()).
+      try {
+        this.sampler.capture(frame, iw, ih);
+      } catch (err) {
+        logger.warn('tracker', `Appearance sampling unavailable: ${errorMessage(err)}`);
+      }
       const out = await this.detector.detect(frame, s.confidenceThreshold, 30);
       const done = performance.now();
       this.detRuns++;
@@ -339,7 +354,9 @@ export class App {
 
       const detections: Detection[] = out.detections.map((d) => {
         const box = { x: d.bbox[0] / iw, y: d.bbox[1] / ih, w: d.bbox[2] / iw, h: d.bbox[3] / ih };
-        return { label: d.label, score: d.score, box: mirror ? mirrorBox(box) : box };
+        // Sample in frame space (before mirroring) — that's how the snapshot was taken.
+        const appearance = this.sampler.signature(box);
+        return { label: d.label, score: d.score, box: mirror ? mirrorBox(box) : box, appearance };
       });
       this.lastDetections = detections;
       this.analytics.lastDetections = detections;
@@ -579,7 +596,15 @@ export class App {
         const moving = t.movement === 'moving' && t.status === 'active';
         const dir = moving ? compassArrow(compassFromVelocity(t.vx * W, t.vy * H)) : '·';
         return `<div class="row" data-id="${t.id}" style="--c:${colorFor(t.label)}"><b style="color:var(--c)">${formatId(t.id)}</b><span>${escapeHtml(t.label.toUpperCase())}</span><span>${dir}</span>
-          <small>${t.status === 'lost' ? 'SIGNAL LOST' : moving ? `MOVING ${Math.round(t.speedPx)} px/s` : 'STATIONARY'}${blip ? ` · ${blip.point.bearing.toFixed(0)}° · ~${blip.point.range.toFixed(1)} m est.` : ''}</small></div>`;
+          <small>${
+            blip?.hiddenFor != null
+              ? `HIDDEN · last seen ${blip.hiddenFor.toFixed(1)} s ago`
+              : blip?.motion && blip.motion.trend !== 'steady'
+                ? `${TREND_ARROW[blip.motion.trend]} ${TREND_LABEL[blip.motion.trend]}${blip.motion.trend !== 'crossing' ? ` ${Math.abs(blip.motion.rangeRate).toFixed(1)} m/s` : ''}`
+                : moving
+                  ? `MOVING ${Math.round(t.speedPx)} px/s`
+                  : 'STATIONARY'
+          }${blip ? ` · ${blip.point.bearing.toFixed(0)}° · ~${blip.range.toFixed(1)} ±${(blip.range * blip.uncertainty).toFixed(1)} m est.` : ''}</small></div>`;
       })
       .join('');
     $('radarSide').innerHTML = html || '<div class="row" style="--c:var(--muted)"><span>No targets</span></div>';

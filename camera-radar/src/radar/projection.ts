@@ -122,9 +122,15 @@ export class MonocularProjection {
       z = (realH * fy) / Math.max(o.h, 1e-3);
       basis = `apparent height vs typical ${o.label} height ${realH} m`;
     } else if (!cutH) {
-      z = (realW * fx) / Math.max(o.w, 1e-3);
+      // Cut off top/bottom: the visible height is smaller than the real one, so the
+      // height-based figure over-states distance — it is a ceiling, not an estimate.
+      // Use the width estimate, capped by that ceiling (the same rule as when both
+      // axes are cut), so a box nudging past a frame edge can't make the range jump.
+      const widthZ = (realW * fx) / Math.max(o.w, 1e-3);
+      const heightCeiling = (realH * fy) / Math.max(o.h, 1e-3);
+      z = Math.min(widthZ, heightCeiling);
       quality = 'rough';
-      basis = `partially visible — apparent width vs typical width ${realW} m`;
+      basis = `partially visible — apparent width vs typical width ${realW} m, capped by visible height`;
     } else {
       z = Math.min((realH * fy) / Math.max(o.h, 1e-3), (realW * fx) / Math.max(o.w, 1e-3));
       quality = 'rough';

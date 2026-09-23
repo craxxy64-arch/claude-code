@@ -36,3 +36,14 @@ test('depth provider overrides the estimate', () => {
   assert.equal(r.measured, true);
   assert.ok(Math.abs(r.range - 2) < 1e-9);
 });
+
+test('range does not jump when a box edge-touching object shifts by a hair', () => {
+  // Real case: a sitting dog against the bottom-right corner. Its box slid
+  // ~0.5% and the estimate used to flip between 1.3 m and 2.9 m.
+  const p = new MonocularProjection();
+  p.hFovDeg = 70;
+  p.aspect = 640 / 480;
+  const ranges = [0.873, 0.876, 0.879, 0.882, 0.885].map((x) => p.project({ label: 'dog', x, y: 0.755, w: 0.212, h: 0.462 }).range);
+  const spread = Math.max(...ranges) - Math.min(...ranges);
+  assert.ok(spread < 0.1, `ranges ${ranges.map((r) => r.toFixed(2)).join(', ')}`);
+});

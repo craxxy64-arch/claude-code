@@ -3,6 +3,7 @@ import type { Track } from '../tracking/types.ts';
 import { formatId } from '../utils/format.ts';
 import { MONO } from '../utils/fonts.ts';
 import { MonocularProjection, type RadarPoint } from './projection.ts';
+import { fitMotion, rangeUncertainty, TREND_ARROW, TREND_LABEL, type Motion } from './kinematics.ts';
 import type { AnimationLevel } from '../settings/Settings.ts';
 
 export interface RadarOptions {
@@ -36,6 +37,7 @@ interface RadarTrackState {
   trail: { t: number; X: number; Y: number }[];
   lastT: number;
   seen: number;
+  occluded: boolean;
 }
 
 export interface RadarBlip {
@@ -44,7 +46,35 @@ export interface RadarBlip {
   point: RadarPoint;
   X: number;
   Y: number;
+  /** Smoothed estimated distance, m. */
+  range: number;
+  /** Fractional ± on range (how sure the radar is about distance). */
+  uncertainty: number;
+  /** Closing / moving away / crossing, fitted from recent history (null until enough history). */
+  motion: Motion | null;
+  /** Seconds since last seen, when the target is hidden (e.g. something passing in front). */
+  hiddenFor: number | null;
+  /** Another target overlaps it, so its distance is being held rather than re-estimated. */
+  partlyHidden: boolean;
 }
+
+/** True when another target's box covers a meaningful part of this one's. */
+function overlappedByOther(track: Track, all: { track: Track }[]): boolean {
+  const ax0 = track.x - track.w / 2;
+  const ay0 = track.y - track.h / 2;
+  const area = track.w * track.h;
+  if (area <= 0) return false;
+  for (const { track: o } of all) {
+    if (o.id === track.id || o.status === 'tentative') continue;
+    const ix = Math.max(0, Math.min(ax0 + track.w, o.x + o.w / 2) - Math.max(ax0, o.x - o.w / 2));
+    const iy = Math.max(0, Math.min(ay0 + track.h, o.y + o.h / 2) - Math.max(ay0, o.y - o.h / 2));
+    if ((ix * iy) / area > 0.15) return true;
+  }
+  return false;
+}
+
+/** Seconds ahead the projected path is drawn. */
+const PROJECT_SEC = 1.5;
 
 /**
  * Sector ("B-scope"-style) radar: the camera sits at the apex, targets are
@@ -131,7 +161,7 @@ export class RadarRenderer {
     const compact = W < 420;
     const half = Math.min(80, this.projection.hFovDeg / 2 + 9);
     const halfRad = (half * Math.PI) / 180;
-    const topPad = compact ? 34 : 46;
+    const topPad = compact ? 62 : 64; // room for the header and situation lines
     const bottomPad = compact ? 44 : 54;
     const side = 18;
     const availH = H - topPad - bottomPad;
@@ -152,20 +182,43 @@ export class RadarRenderer {
       const p = this.projection.project({ label: track.label, x, y, w: track.w, h: track.h });
       let st = this.state.get(track.id);
       if (!st) {
-        st = { X: p.X, Y: p.Y, point: p, trail: [], lastT: now, seen: now };
+        st = { X: p.X, Y: p.Y, point: p, trail: [], lastT: now, seen: now, occluded: false };
         this.state.set(track.id, st);
       }
-      // Range estimates jitter with box size; smooth them over ~0.3 s.
+      // Range comes from box size. A box that's partly covered by another target
+      // shrinks, which would read as "moving away" — so while a target is hidden or
+      // overlapped, hold its last good distance and keep only its bearing current.
+      st.occluded = track.status === 'lost' || overlappedByOther(track, tracks);
       const a = 1 - Math.exp(-Math.max(0, now - st.lastT) / 0.3);
-      st.X += a * (p.X - st.X);
-      st.Y += a * (p.Y - st.Y);
-      st.point = p;
+      if (st.occluded) {
+        const r = Math.hypot(st.X, st.Y);
+        const rad = (p.bearing * Math.PI) / 180;
+        st.X += a * (r * Math.sin(rad) - st.X);
+        st.Y += a * (r * Math.cos(rad) - st.Y);
+      } else {
+        // Range estimates jitter with box size; smooth them over ~0.3 s.
+        st.X += a * (p.X - st.X);
+        st.Y += a * (p.Y - st.Y);
+        st.point = p;
+      }
       st.lastT = now;
       const lastTrail = st.trail.at(-1);
-      if (!lastTrail || now - lastTrail.t > 0.1) st.trail.push({ t: now, X: st.X, Y: st.Y });
+      // Held positions aren't measurements; keep them out of the motion fit.
+      if (!st.occluded && (!lastTrail || now - lastTrail.t > 0.1)) st.trail.push({ t: now, X: st.X, Y: st.Y });
       const cutoff = now - Math.max(opts.trailSec, 1);
       while (st.trail.length && st.trail[0].t < cutoff) st.trail.shift();
-      blips.push({ id: track.id, label: track.label, point: p, X: st.X, Y: st.Y });
+      blips.push({
+        id: track.id,
+        label: track.label,
+        point: p,
+        X: st.X,
+        Y: st.Y,
+        range: Math.hypot(st.X, st.Y),
+        uncertainty: rangeUncertainty(p),
+        motion: st.occluded ? null : fitMotion(st.trail, now),
+        partlyHidden: st.occluded && track.status !== 'lost',
+        hiddenFor: track.status === 'lost' ? Math.max(0, now - track.lastSeen) : null,
+      });
     }
     for (const id of this.state.keys()) if (!alive.has(id)) this.state.delete(id);
     this.blips = blips;
@@ -215,17 +268,73 @@ export class RadarRenderer {
       const selected = opts.selectedId === track.id;
       const moving = track.movement === 'moving';
 
-      // Motion vector derived from the radar trail (actual displacement).
-      if (opts.showVectors && moving && !lost && st.trail.length > 3) {
-        const ref = st.trail.find((p) => now - p.t <= 0.6) ?? st.trail[0];
-        const dt = now - ref.t;
-        if (dt > 0.15) {
-          const vX = (st.X - ref.X) / dt;
-          const vY = (st.Y - ref.Y) / dt;
-          const tip = toScreen(st.X + vX * 1.0, st.Y + vY * 1.0);
-          const len = Math.hypot(tip.sx - sx, tip.sy - sy);
-          if (len > 4) this.arrow(ctx, sx, sy, tip.sx, tip.sy, color);
+      const blip = blips.find((b) => b.id === track.id)!;
+
+      // Range uncertainty: a bar along the line of sight showing how sure the distance is.
+      if (!lost && !blip.point.measured) {
+        const u = blip.uncertainty;
+        const k0 = 1 - u;
+        const k1 = 1 + u;
+        const n = toScreen(st.X * k0, st.Y * k0);
+        const f = toScreen(st.X * k1, st.Y * k1);
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = selected ? 0.55 : 0.3;
+        ctx.lineWidth = selected ? 3 : 2;
+        ctx.beginPath();
+        ctx.moveTo(n.sx, n.sy);
+        ctx.lineTo(f.sx, f.sy);
+        ctx.stroke();
+        // End caps perpendicular to the line of sight.
+        const ang = Math.atan2(f.sy - n.sy, f.sx - n.sx) + Math.PI / 2;
+        const cap = 4;
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        for (const e of [n, f]) {
+          ctx.moveTo(e.sx - Math.cos(ang) * cap, e.sy - Math.sin(ang) * cap);
+          ctx.lineTo(e.sx + Math.cos(ang) * cap, e.sy + Math.sin(ang) * cap);
         }
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
+      // Heading arrow plus dotted projected path: where it will be in PROJECT_SEC at this velocity.
+      const mv = blip.motion;
+      if (opts.showVectors && mv && mv.speed > 0.2) {
+        const tip = toScreen(st.X + mv.vX * 0.6, st.Y + mv.vY * 0.6);
+        const end = toScreen(st.X + mv.vX * PROJECT_SEC, st.Y + mv.vY * PROJECT_SEC);
+        if (Math.hypot(tip.sx - sx, tip.sy - sy) > 4) this.arrow(ctx, sx, sy, tip.sx, tip.sy, color);
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.7;
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([2, 4]);
+        ctx.beginPath();
+        ctx.moveTo(tip.sx, tip.sy);
+        ctx.lineTo(end.sx, end.sy);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(end.sx, end.sy, 3.5, 0, Math.PI * 2);
+        ctx.stroke();
+        if (selected) {
+          ctx.font = `9px ${MONO}`;
+          ctx.fillStyle = color;
+          ctx.textAlign = 'center';
+          ctx.fillText(`+${PROJECT_SEC}s`, end.sx, end.sy - 7);
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // Hidden target: dashed ring where it was last seen.
+      if (lost) {
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.6;
+        ctx.setLineDash([3, 3]);
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.arc(sx, sy, 12, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
       }
 
       const r = selected ? 7 : 5.5;
@@ -280,8 +389,20 @@ export class RadarRenderer {
       // Label (with simple collision avoidance against labels already placed).
       const title = opts.showIds ? `${formatId(track.id)} ${track.label.toUpperCase()}` : track.label.toUpperCase();
       const est = st.point.quality === 'rough' ? '≈' : '~';
-      let second = lost ? 'SIGNAL LOST' : `${est}${st.point.range.toFixed(1)} m est.`;
-      if (opts.showConfidence && !lost) second += ` · ${Math.round(track.avgScore * 100)}%`;
+      let second: string;
+      if (lost) {
+        second = `HIDDEN · last seen ${(blip.hiddenFor ?? 0).toFixed(1)} s ago`;
+      } else if (blip.partlyHidden) {
+        second = `${est}${blip.range.toFixed(1)} m held · PARTLY HIDDEN`;
+      } else {
+        second = `${est}${blip.range.toFixed(1)} ±${(blip.range * blip.uncertainty).toFixed(1)} m`;
+        if (mv && mv.trend !== 'steady') {
+          second += ` · ${TREND_ARROW[mv.trend]} ${TREND_LABEL[mv.trend]}`;
+          if (mv.trend !== 'crossing') second += ` ${Math.abs(mv.rangeRate).toFixed(1)} m/s`;
+        } else if (opts.showConfidence) {
+          second += ` · ${Math.round(track.avgScore * 100)}%`;
+        }
+      }
       ctx.font = `600 ${font}px ${MONO}`;
       const lw = Math.max(ctx.measureText(title).width, ctx.measureText(second).width * 0.95) + 8;
       const lh = font * 2 + 6;
@@ -321,6 +442,38 @@ export class RadarRenderer {
 
     this.drawApex(ctx, ax, ay);
     this.drawHud(ctx, W, H, tracks.length, opts.range, compact);
+    this.drawSituation(ctx, W, compact);
+  }
+
+  /** The closest target and what it's doing, plus how many are closing / hidden. */
+  private drawSituation(ctx: CanvasRenderingContext2D, W: number, compact: boolean): void {
+    const visible = this.blips.filter((b) => b.hiddenFor == null);
+    const closest = visible.reduce<RadarBlip | null>((a, b) => (!a || b.range < a.range ? b : a), null);
+    const closing = visible.filter((b) => b.motion?.trend === 'closing').length;
+    const hidden = this.blips.length - visible.length;
+    const y = compact ? 46 : 38;
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = `600 ${compact ? 10 : 11}px ${MONO}`;
+    ctx.textAlign = 'left';
+    if (closest) {
+      const m = closest.motion;
+      let text = `CLOSEST ${formatId(closest.id)} ${closest.label.toUpperCase()} ~${closest.range.toFixed(1)} m est.`;
+      if (m && m.trend === 'closing' && m.timeToReach != null && m.timeToReach < 30) text += ` · ${TREND_ARROW.closing} reaches camera in ~${m.timeToReach.toFixed(0)} s`;
+      else if (m && m.trend !== 'steady') text += ` · ${TREND_ARROW[m.trend]} ${TREND_LABEL[m.trend]}`;
+      ctx.fillStyle = m?.trend === 'closing' ? this.theme.warn : this.theme.text;
+      ctx.fillText(text, 12, y);
+    } else {
+      ctx.fillStyle = this.theme.textDim;
+      ctx.fillText('NO TARGETS IN VIEW', 12, y);
+    }
+    const parts = [];
+    if (closing) parts.push(`${closing} CLOSING`);
+    if (hidden) parts.push(`${hidden} HIDDEN`);
+    if (parts.length && !compact) {
+      ctx.textAlign = 'right';
+      ctx.fillStyle = this.theme.textDim;
+      ctx.fillText(parts.join(' · '), W - 12, y);
+    }
   }
 
   private drawGrid(ctx: CanvasRenderingContext2D, ax: number, ay: number, R: number, half: number, range: number, compact: boolean): void {

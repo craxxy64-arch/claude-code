@@ -2397,3 +2397,9 @@ a.btn.btn-primary {
     animation: none;
   }
 }
+
+/* Fullscreen radar: keep the side list clear of the header + situation lines. */
+.radar-wrap:fullscreen .radar-side,
+.radar-wrap.pseudo-fullscreen .radar-side {
+  top: 56px;
+}
