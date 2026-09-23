@@ -84,7 +84,8 @@ export async function loadModel(
         const type = head.headers.get('content-type') ?? '';
         if (!head.ok || type.includes('text/html')) throw new Error(`HTTP ${head.status}`);
       }
-      const m = await cocoSsd.load({ base, modelUrl: candidate.url });
+      // coco-ssd forwards modelUrl to loadGraphModel, which also accepts an IOHandler.
+      const m = await cocoSsd.load({ base, modelUrl: weightsHandler(candidate.url) as unknown as string });
       model = m;
       return candidate;
     } catch (err) {
@@ -92,6 +93,35 @@ export async function loadModel(
     }
   }
   throw new Error(`Model download failed (${errors.join('; ')})`);
+}
+
+/**
+ * Loads a graph model, accepting weight shards either as raw binary or as
+ * base64 text (`*.b64.txt`) for hosts that only serve text / web media types.
+ */
+function weightsHandler(modelUrl: string): tf.io.IOHandler {
+  const base = modelUrl.slice(0, modelUrl.lastIndexOf('/') + 1);
+  const fetchShard = async (path: string): Promise<ArrayBuffer> => {
+    const res = await fetch(base + path);
+    if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
+    if (!path.endsWith('.b64.txt')) return res.arrayBuffer();
+    const bin = atob((await res.text()).trim());
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out.buffer;
+  };
+  return {
+    load: async () => {
+      const res = await fetch(modelUrl);
+      if (!res.ok) throw new Error(`model.json: HTTP ${res.status}`);
+      const json = (await res.json()) as tf.io.ModelJSON;
+      return tf.io.getModelArtifactsForJSON(json, async (manifest) => {
+        const specs = manifest.flatMap((g) => g.weights);
+        const buffers = await Promise.all(manifest.flatMap((g) => g.paths).map(fetchShard));
+        return [specs, tf.io.concatenateArrayBuffers(buffers)];
+      });
+    },
+  };
 }
 
 export async function detect(frame: ImageBitmap, minScore: number, maxBoxes: number): Promise<DetectOutput> {

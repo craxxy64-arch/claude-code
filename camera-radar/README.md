@@ -19,6 +19,8 @@ Open the page, press **Start camera**, and allow camera access. `localhost` coun
 
 `npm run build` writes a static site to `dist/`, which any static host can serve.
 
+**No camera, or camera access blocked?** Use **Open video** to run the same pipeline on a local video file. The file is read in the browser and is not uploaded. If a `sample.webm` is deployed next to the page, a **Play sample clip** button appears. For hosts that refuse binary files, `node scripts/pack-model.mjs <src> <dst>` re-encodes the model weights as base64 text, and the loader reads either format.
+
 ## What it does
 
 | Area | Implementation |

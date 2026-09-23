@@ -473,11 +473,12 @@ export class RadarRenderer {
     ctx.textAlign = 'center';
     ctx.fillStyle = t.warn;
     ctx.font = `${compact ? 9 : 10.5}px ${MONO}`;
+    const full = 'Estimated distance — camera calibration required for accurate measurements.';
     const msg = this.projection.depth
       ? `Range measured by depth sensor (${this.projection.depth.id}).`
-      : compact
+      : compact || ctx.measureText(full).width > W - 24
         ? 'Estimated distance — calibration required for accuracy.'
-        : 'Estimated distance — camera calibration required for accurate measurements.';
+        : full;
     ctx.fillText(msg, W / 2, H - 12);
   }
 

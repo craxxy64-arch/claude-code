@@ -601,7 +601,7 @@ export class App {
     const live = info.state === 'live';
     const busy = info.state === 'requesting';
     btn.classList.toggle('is-live', live || busy);
-    btn.querySelector('.lbl')!.textContent = live ? 'Stop camera' : busy ? 'Starting…' : 'Start camera';
+    btn.querySelector('.lbl')!.textContent = live ? (this.camera.sourceKind === 'file' ? 'Stop video' : 'Stop camera') : busy ? 'Starting…' : 'Start camera';
     btn.disabled = info.state === 'unsupported';
 
     const toneMap: Record<string, 'ok' | 'warn' | 'alert' | 'idle' | 'busy'> = {
@@ -648,7 +648,11 @@ export class App {
       this.detRuns = 0;
       this.cameraFrames = 0;
       this.populateResolutions();
-      this.pushEvent({ at: Date.now(), type: 'system', text: `Camera live: ${info.label || 'camera'} ${info.width}×${info.height}` });
+      this.pushEvent({
+        at: Date.now(),
+        type: 'system',
+        text: `${this.camera.sourceKind === 'file' ? 'Video file' : 'Camera live'}: ${info.label || 'camera'} ${info.width}×${info.height}`,
+      });
     }
     if (info.state === 'disconnected') {
       this.pushEvent({ at: Date.now(), type: 'system', text: 'Camera disconnected' });
@@ -713,7 +717,8 @@ export class App {
     }
     const ok = this.recorder.start({
       camera: this.camera.element.srcObject as MediaStream | null,
-      withOverlays: this.settings.get('recordOverlays'),
+      // A video file has no MediaStream, so it is always recorded via the composite canvas.
+      withOverlays: this.settings.get('recordOverlays') || this.camera.sourceKind === 'file',
       width: this.camera.width,
       height: this.camera.height,
     });
@@ -1017,6 +1022,32 @@ export class App {
     };
     $('btnCamera').onclick = toggleCamera;
     $('btnEmptyStart').onclick = () => void this.startCamera();
+    const fileInput = $<HTMLInputElement>('fileInput');
+    const pickFile = () => fileInput.click();
+    $('btnFile').onclick = pickFile;
+    $('btnEmptyFile').onclick = pickFile;
+    // Optional demo footage: shown only when a sample.webm is deployed next to the page.
+    const sampleBtn = $<HTMLButtonElement>('btnSample');
+    fetch(new URL('sample.webm', document.baseURI), { method: 'HEAD' })
+      .then((r) => (sampleBtn.hidden = !(r.ok && (r.headers.get('content-type') ?? '').startsWith('video/'))))
+      .catch(() => undefined);
+    sampleBtn.onclick = async () => {
+      try {
+        const blob = await (await fetch(new URL('sample.webm', document.baseURI))).blob();
+        this.settings.set({ mirror: false });
+        await this.camera.startFile(new File([blob], 'sample.webm', { type: blob.type || 'video/webm' }));
+      } catch (err) {
+        toast(`Could not load the sample clip: ${errorMessage(err)}`, 'alert');
+      }
+    };
+    fileInput.onchange = () => {
+      const file = fileInput.files?.[0];
+      fileInput.value = '';
+      if (!file) return;
+      // Recorded footage is not a selfie view; show it unmirrored (toggle back if wanted).
+      this.settings.set({ mirror: false });
+      void this.camera.startFile(file);
+    };
     $<HTMLSelectElement>('cameraSelect').onchange = (e) => this.settings.set({ cameraId: (e.target as HTMLSelectElement).value || null });
     $<HTMLSelectElement>('resolutionSelect').onchange = (e) => this.settings.set({ resolution: (e.target as HTMLSelectElement).value });
     $('btnMirror').onclick = () => this.settings.set({ mirror: !this.settings.get('mirror') });

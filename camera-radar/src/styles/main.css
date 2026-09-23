@@ -625,6 +625,15 @@ body.no-analytics .panel-analytics {
   font-size: 13px;
   line-height: 1.5;
 }
+.empty-actions {
+  justify-content: center;
+  margin-top: 0;
+}
+.empty-state .btn:not(.btn-primary) {
+  background: rgba(255, 255, 255, 0.06);
+  color: #d6ebe5;
+  border-color: rgba(140, 205, 190, 0.3);
+}
 .empty-state[data-tone='alert'] h2 {
   color: #ff7b7b;
 }

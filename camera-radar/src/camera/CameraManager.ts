@@ -33,6 +33,10 @@ export class CameraManager extends Emitter<CameraEvents> implements FrameSource 
   private stream: MediaStream | null = null;
   private track: MediaStreamTrack | null = null;
   private stateValue: CameraState = 'idle';
+  /** 'file' when a local video file is played through the pipeline instead of a camera. */
+  sourceKind: 'camera' | 'file' = 'camera';
+  private fileUrl: string | null = null;
+  private fileLabel = '';
   private messageValue = 'Camera off';
   private requested: { deviceId: string | null; width: number; height: number } | null = null;
   private fps = new FpsMeter(1000);
@@ -84,7 +88,7 @@ export class CameraManager extends Emitter<CameraEvents> implements FrameSource 
       state: this.stateValue,
       message: this.messageValue,
       deviceId: (settings.deviceId as string | undefined) ?? this.requested?.deviceId ?? null,
-      label: this.track?.label ?? '',
+      label: this.sourceKind === 'file' ? this.fileLabel : (this.track?.label ?? ''),
       width: this.width,
       height: this.height,
       nominalFps: typeof settings.frameRate === 'number' ? settings.frameRate : null,
@@ -200,6 +204,44 @@ export class CameraManager extends Emitter<CameraEvents> implements FrameSource 
     return true;
   }
 
+  /**
+   * Plays a local video file through the same pipeline (useful where camera
+   * access is blocked, or to analyse recorded footage). The file never leaves
+   * the browser: it is read through an object URL.
+   */
+  async startFile(file: File): Promise<boolean> {
+    const token = ++this.startToken;
+    this.releaseStream();
+    this.requested = null;
+    this.sourceKind = 'file';
+    this.fileLabel = file.name;
+    this.fileUrl = URL.createObjectURL(file);
+    const v = this.element;
+    v.loop = true;
+    v.src = this.fileUrl;
+    this.setState('requesting', `Opening ${file.name}…`);
+    try {
+      await v.play();
+    } catch (err) {
+      if (token !== this.startToken) return false;
+      this.releaseStream();
+      this.setState('error', `Could not play "${file.name}" (${errorMessage(err)}). Try an MP4 or WebM file.`);
+      logger.error('camera', err);
+      return false;
+    }
+    await this.waitForDimensions();
+    if (token !== this.startToken) return false;
+    if (!this.width) {
+      this.releaseStream();
+      this.setState('error', `"${file.name}" has no video track this browser can decode.`);
+      return false;
+    }
+    this.startFrameCounter();
+    logger.info('camera', `Video file: ${file.name} ${this.width}×${this.height}`);
+    this.setState('live', `Video file: ${file.name}`);
+    return true;
+  }
+
   stop(): void {
     this.startToken++;
     this.releaseStream();
@@ -229,7 +271,7 @@ export class CameraManager extends Emitter<CameraEvents> implements FrameSource 
     switch (name) {
       case 'NotAllowedError':
       case 'SecurityError':
-        this.setState('denied', 'Camera permission denied. Allow camera access in the browser address bar, then press Start.');
+        this.setState('denied', 'Camera permission denied. Allow camera access in the browser address bar and press Start — or open a video file instead.');
         break;
       case 'NotFoundError':
       case 'OverconstrainedError':
@@ -299,6 +341,15 @@ export class CameraManager extends Emitter<CameraEvents> implements FrameSource 
     this.stream = null;
     this.track = null;
     this.element.srcObject = null;
+    if (this.fileUrl) {
+      this.element.pause();
+      this.element.removeAttribute('src');
+      this.element.load();
+      URL.revokeObjectURL(this.fileUrl);
+      this.fileUrl = null;
+    }
+    this.element.loop = false;
+    this.sourceKind = 'camera';
     this.fps.reset();
   }
 

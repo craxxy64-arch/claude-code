@@ -313,6 +313,31 @@ try {
     await ctx.close();
   }
 
+  // ---------------------------------------------------- video file input --
+  {
+    // Record raw camera footage with the app itself, then analyse that file.
+    const { page: p, ctx } = await openPage(browser);
+    await p.evaluate(() => window.cameraRadar.settings.set({ recordOverlays: false }));
+    await p.click('#btnCamera');
+    await p.waitForFunction(() => window.cameraRadar.camera.info().state === 'live', null, { timeout: 15000 });
+    await p.click('#btnRecord');
+    await sleep(6000);
+    await p.click('#btnRecord');
+    await p.waitForFunction(() => window.cameraRadar.recorder.recordings.length > 0, null, { timeout: 10000 });
+    const [dl] = await Promise.all([p.waitForEvent('download'), p.click('#recordingList [data-save]')]);
+    const clip = join(OUT, 'clip.webm');
+    await dl.saveAs(clip);
+    await p.click('#btnCamera');
+    await p.setInputFiles('#fileInput', clip);
+    await p.waitForFunction(() => window.cameraRadar.camera.info().state === 'live', null, { timeout: 15000 });
+    await p.waitForFunction(() => window.cameraRadar.detector.info.status === 'ready', null, { timeout: 60000 });
+    await sleep(5000);
+    const st = await state(p);
+    check('Video file analysed through the same pipeline', st.camera.label === 'clip.webm' && st.detections.length > 0 && st.tracks.length > 0, `${st.camera.width}×${st.camera.height}, ${st.detections.map((d) => d.label).join(', ')}`);
+    await p.screenshot({ path: join(OUT, '16-video-file.png') });
+    await ctx.close();
+  }
+
   // ------------------------------------------------------ model failure --
   {
     const { page: p, ctx, errors: errs } = await openPage(browser, {
