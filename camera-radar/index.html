@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="Camera Radar — local, in-browser object detection, multi-target tracking, motion heatmap and radar projection from a webcam." />
+    <title>Camera Radar</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 28 3 8a18 18 0 0 1 26 0Z' fill='none' stroke='%235cf2b0' stroke-width='2'/%3E%3Ccircle cx='19' cy='13' r='2.5' fill='%235cf2b0'/%3E%3C/svg%3E" />
+  </head>
+  <body class="mode-full">
+    <div id="app" class="app">
+      <header class="topbar">
+        <div class="brand">
+          <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+            <path d="M16 28 3 8a18 18 0 0 1 26 0Z" />
+            <path d="M16 28 8.5 16a9 9 0 0 1 15 0Z" />
+            <circle cx="19.5" cy="12.5" r="2.2" />
+          </svg>
+          <div class="brand-text">
+            <span class="brand-name">CAMERA&nbsp;RADAR</span>
+            <span class="brand-sub">Optical tracking console</span>
+          </div>
+        </div>
+        <div class="status-row" role="status" aria-live="polite">
+          <div class="chip" id="chipCamera" data-tone="idle"><i class="dot"></i><span class="k">CAM</span><span class="v">OFF</span></div>
+          <div class="chip" id="chipModel" data-tone="idle"><i class="dot"></i><span class="k">MODEL</span><span class="v">IDLE</span></div>
+          <div class="chip" id="chipTargets" data-tone="idle"><i class="dot"></i><span class="k">TARGETS</span><span class="v">0</span></div>
+          <div class="chip" id="chipPrivacy" data-tone="ok" title="All camera frames are processed in this browser tab. Nothing is uploaded."><i class="dot"></i><span class="k">PROCESSING</span><span class="v">LOCAL</span></div>
+          <div class="chip chip-rec" id="chipRec" data-tone="alert" hidden><i class="dot"></i><span class="k">REC</span><span class="v">00:00</span></div>
+          <div class="chip" id="chipPerf" data-tone="warn" hidden><i class="dot"></i><span class="k">PERF</span><span class="v">LOW</span></div>
+        </div>
+        <div class="clock" id="clock">--:--:--</div>
+      </header>
+
+      <nav class="toolbar" aria-label="Controls">
+        <div class="tool-group">
+          <button class="btn btn-primary" id="btnCamera" type="button"><span class="ico">⏻</span><span class="lbl">Start camera</span></button>
+          <label class="select-wrap" title="Camera device">
+            <span class="sr-only">Camera</span>
+            <select id="cameraSelect"><option value="">Default camera</option></select>
+          </label>
+          <label class="select-wrap" title="Resolution">
+            <span class="sr-only">Resolution</span>
+            <select id="resolutionSelect"></select>
+          </label>
+          <button class="btn btn-toggle" id="btnMirror" type="button" aria-pressed="true" title="Mirror / unmirror view"><span class="ico">⇋</span><span class="lbl">Mirror</span></button>
+        </div>
+        <div class="tool-group segmented" role="tablist" aria-label="Display mode">
+          <button type="button" role="tab" data-mode="camera" title="Mode A — camera only (1)"><b>A</b><span class="lbl">Camera</span></button>
+          <button type="button" role="tab" data-mode="radar" title="Mode B — radar only (2)"><b>B</b><span class="lbl">Radar</span></button>
+          <button type="button" role="tab" data-mode="split" title="Mode C — camera + radar (3)"><b>C</b><span class="lbl">Split</span></button>
+          <button type="button" role="tab" data-mode="full" title="Mode D — camera + radar + analytics (4)"><b>D</b><span class="lbl">Analytics</span></button>
+        </div>
+        <div class="tool-group">
+          <button class="btn btn-toggle" id="btnHeatmap" type="button" aria-pressed="false" title="Motion heatmap (H)"><span class="ico">▦</span><span class="lbl">Heatmap</span></button>
+          <button class="btn" id="btnSnapshot" type="button" title="Snapshot (S)"><span class="ico">◎</span><span class="lbl">Snapshot</span></button>
+          <button class="btn btn-rec" id="btnRecord" type="button" title="Start / stop recording (R)"><span class="ico">●</span><span class="lbl">Record</span></button>
+          <button class="btn" id="btnFullscreen" type="button" title="Fullscreen radar (F)"><span class="ico">⤢</span><span class="lbl">Radar</span></button>
+          <button class="btn btn-toggle" id="btnSettings" type="button" aria-pressed="false" title="Settings"><span class="ico">⚙</span><span class="lbl">Settings</span></button>
+          <button class="btn btn-toggle" id="btnDebug" type="button" aria-pressed="false" title="Debug panel (D)"><span class="ico">⌗</span><span class="lbl">Debug</span></button>
+        </div>
+      </nav>
+
+      <main class="stage" id="stage">
+        <section class="panel panel-camera" id="cameraPanel" aria-label="Camera feed">
+          <header class="panel-head">
+            <span class="panel-title">Camera feed</span>
+            <span class="panel-meta" id="camMeta">—</span>
+          </header>
+          <div class="viewport" id="viewport">
+            <video id="video" playsinline muted></video>
+            <canvas id="overlay"></canvas>
+            <div class="rec-badge" id="recBadge" hidden>● REC <span>00:00</span></div>
+            <div class="hud-tag hud-motion" id="motionTag">MOTION · —</div>
+            <div class="empty-state" id="emptyState">
+              <svg viewBox="0 0 64 64" aria-hidden="true"><path d="M32 56 6 16a36 36 0 0 1 52 0Z" /><path d="M32 56 19 36a18 18 0 0 1 26 0Z" /></svg>
+              <h2 id="emptyTitle">Camera is off</h2>
+              <p id="emptyMsg">Start the camera to begin detection and tracking. Frames are processed locally in this browser and never uploaded.</p>
+              <button class="btn btn-primary" id="btnEmptyStart" type="button">Start camera</button>
+            </div>
+          </div>
+          <footer class="panel-foot">
+            <div class="legend" id="heatLegend" hidden>
+              <span>Low</span><i class="heat-scale"></i><span>High activity</span><span class="muted" id="heatWindow"></span>
+            </div>
+            <div class="legend" id="categoryLegend">
+              <span><i style="--c: #5cf2b0"></i>Person</span>
+              <span><i style="--c: #b99bff"></i>Electronics</span>
+              <span><i style="--c: #8fb8c9"></i>Furniture</span>
+              <span><i style="--c: #ffb547"></i>Animal</span>
+              <span><i style="--c: #f5e27a"></i>Kitchen</span>
+              <span><i style="--c: #ff8fb1"></i>Bags</span>
+              <span><i style="--c: #7aa7ff"></i>Vehicle</span>
+            </div>
+          </footer>
+        </section>
+
+        <section class="panel panel-radar" id="radarPanel" aria-label="Radar">
+          <header class="panel-head">
+            <span class="panel-title">Radar</span>
+            <span class="panel-meta" id="radarMeta">Bearing measured · range estimated</span>
+            <button class="icon-btn" id="btnRadarFs" type="button" title="Fullscreen radar">⤢</button>
+          </header>
+          <div class="radar-wrap" id="radarWrap">
+            <canvas id="radar"></canvas>
+            <div class="radar-side" id="radarSide"></div>
+            <button class="btn radar-exit" id="btnRadarExit" type="button">Exit fullscreen</button>
+          </div>
+        </section>
+
+        <aside class="panel panel-analytics" id="analyticsPanel" aria-label="Analytics">
+          <header class="panel-head"><span class="panel-title">Analytics</span><span class="panel-meta">live</span></header>
+          <div class="analytics-scroll">
+            <div class="metrics" id="metrics"></div>
+            <div class="section">
+              <h3>Targets <span class="muted" id="targetCount"></span></h3>
+              <ul class="target-list" id="targetList"></ul>
+            </div>
+            <div class="section">
+              <h3>Motion</h3>
+              <div class="motion-meter"><div class="bar"><i id="motionBar"></i></div><span id="motionLevel">—</span></div>
+              <canvas class="spark" id="motionSpark" height="46"></canvas>
+              <div class="kv"><span>History window</span><span id="motionWindow">—</span></div>
+              <div class="kv"><span>Hotspot</span><span id="motionHotspot">—</span></div>
+              <div class="row-actions">
+                <button class="btn btn-sm" id="btnResetHeat" type="button">Reset heatmap</button>
+                <button class="btn btn-sm btn-toggle" id="btnHeatmap2" type="button" aria-pressed="false">Show heatmap</button>
+              </div>
+            </div>
+            <div class="section">
+              <h3>Events</h3>
+              <ol class="event-log" id="eventLog"></ol>
+            </div>
+            <div class="section" id="recordingsSection" hidden>
+              <h3>Session captures</h3>
+              <ul class="rec-list" id="recordingList"></ul>
+            </div>
+          </div>
+        </aside>
+      </main>
+
+      <aside class="drawer" id="targetDrawer" aria-label="Target details" hidden>
+        <header class="drawer-head">
+          <span class="drawer-title" id="tdTitle">Target</span>
+          <button class="icon-btn" data-close="targetDrawer" type="button" title="Close">✕</button>
+        </header>
+        <div class="drawer-body" id="tdBody"></div>
+      </aside>
+
+      <aside class="drawer" id="settingsDrawer" aria-label="Settings" hidden>
+        <header class="drawer-head">
+          <span class="drawer-title">Settings</span>
+          <button class="icon-btn" data-close="settingsDrawer" type="button" title="Close">✕</button>
+        </header>
+        <div class="drawer-body" id="settingsBody"></div>
+      </aside>
+
+      <section class="debug-panel" id="debugPanel" aria-label="Debug panel" hidden>
+        <header class="drawer-head">
+          <span class="drawer-title">Debug</span>
+          <button class="icon-btn" id="btnDebugClose" type="button" title="Close">✕</button>
+        </header>
+        <div class="debug-body" id="debugBody"></div>
+      </section>
+
+      <div class="modal" id="snapshotModal" hidden role="dialog" aria-modal="true" aria-label="Snapshot">
+        <div class="modal-card">
+          <header class="drawer-head"><span class="drawer-title">Snapshot</span><button class="icon-btn" id="btnSnapClose" type="button">✕</button></header>
+          <div class="snap-preview"><canvas id="snapCanvas"></canvas></div>
+          <footer class="modal-foot">
+            <label class="toggle"><input type="checkbox" id="snapOverlays" /><span></span>Include detection overlays</label>
+            <div class="row-actions">
+              <button class="btn" id="btnSnapDiscard" type="button">Discard</button>
+              <button class="btn btn-primary" id="btnSnapSave" type="button">Save PNG</button>
+            </div>
+          </footer>
+        </div>
+      </div>
+
+      <div class="banner" id="banner" hidden></div>
+      <div class="toasts" id="toasts" aria-live="polite"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

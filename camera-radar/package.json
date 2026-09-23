@@ -1,0 +1,29 @@
+{
+  "name": "camera-radar",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Local, browser-based computer-vision tracking console: live camera, object detection, multi-target tracking, motion heatmap and radar projection.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test:unit": "node --experimental-strip-types --test tests/unit/*.test.ts",
+    "fetch-model": "node scripts/fetch-model.mjs",
+    "test:e2e": "node tests/e2e/run-e2e.mjs"
+  },
+  "dependencies": {
+    "@tensorflow-models/coco-ssd": "^2.2.3",
+    "@tensorflow/tfjs-backend-cpu": "^4.22.0",
+    "@tensorflow/tfjs-backend-wasm": "^4.22.0",
+    "@tensorflow/tfjs-backend-webgl": "^4.22.0",
+    "@tensorflow/tfjs-converter": "^4.22.0",
+    "@tensorflow/tfjs-core": "^4.22.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.56.1",
+    "typescript": "5.9",
+    "vite": "^8.3.0"
+  }
+}
