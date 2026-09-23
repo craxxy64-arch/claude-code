@@ -6,6 +6,13 @@
     <meta name="color-scheme" content="dark light" />
     <meta name="description" content="Camera Radar — local, in-browser object detection, multi-target tracking, motion heatmap and radar projection from a webcam." />
     <title>Camera Radar</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <meta name="theme-color" content="#05080b" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Radar" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 28 3 8a18 18 0 0 1 26 0Z' fill='none' stroke='%235cf2b0' stroke-width='2'/%3E%3Ccircle cx='19' cy='13' r='2.5' fill='%235cf2b0'/%3E%3C/svg%3E" />
   </head>
   <body class="mode-full">
@@ -60,6 +67,7 @@
           <button class="btn btn-rec" id="btnRecord" type="button" title="Start / stop recording (R)"><span class="ico">●</span><span class="lbl">Record</span></button>
           <button class="btn" id="btnFullscreen" type="button" title="Fullscreen radar (F)"><span class="ico">⤢</span><span class="lbl">Radar</span></button>
           <button class="btn btn-toggle" id="btnSettings" type="button" aria-pressed="false" title="Settings"><span class="ico">⚙</span><span class="lbl">Settings</span></button>
+          <button class="btn btn-primary" id="btnInstall" type="button" title="Install Camera Radar as an app" hidden><span class="ico">⤓</span><span class="lbl">Install app</span></button>
           <button class="btn btn-toggle" id="btnDebug" type="button" aria-pressed="false" title="Debug panel (D)"><span class="ico">⌗</span><span class="lbl">Debug</span></button>
         </div>
       </nav>

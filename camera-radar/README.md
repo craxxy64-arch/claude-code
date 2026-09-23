@@ -21,6 +21,15 @@ Open the page, press **Start camera**, and allow camera access. `localhost` coun
 
 **No camera, or camera access blocked?** Use **Open video** to run the same pipeline on a local video file. The file is read in the browser and is not uploaded. If a `sample.webm` is deployed next to the page, a **Play sample clip** button appears. For hosts that refuse binary files, `node scripts/pack-model.mjs <src> <dst>` re-encodes the model weights as base64 text, and the loader reads either format.
 
+## Install as an app
+
+Camera Radar is an installable app (PWA). It opens in its own window, gets a home-screen/desktop icon, and works offline after the first load, including the model.
+
+1. Host the static build over HTTPS: `npm run build:pages` produces `dist/` (fast model bundled, `.nojekyll` included) for GitHub Pages or any static host.
+2. Open the site, then install it:
+   - **Chrome / Edge (desktop, Android):** the **Install app** button in the toolbar, or the install icon in the address bar.
+   - **iPhone / iPad (Safari):** Share → **Add to Home Screen**.
+
 ## What it does
 
 | Area | Implementation |

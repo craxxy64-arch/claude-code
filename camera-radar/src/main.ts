@@ -29,3 +29,31 @@ try {
     /* toasts unavailable */
   }
 }
+
+// Installable app + offline support (production builds only, so dev reloads stay fresh).
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch((err) => logger.warn('app', `Offline support unavailable: ${errorMessage(err)}`));
+  });
+}
+
+type InstallPromptEvent = Event & { prompt: () => Promise<void>; userChoice: Promise<{ outcome: string }> };
+let installPrompt: InstallPromptEvent | null = null;
+const installBtn = document.getElementById('btnInstall');
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e as InstallPromptEvent;
+  if (installBtn) installBtn.hidden = false;
+});
+window.addEventListener('appinstalled', () => {
+  installPrompt = null;
+  if (installBtn) installBtn.hidden = true;
+  toast('Camera Radar installed — open it from your apps or home screen.');
+});
+installBtn?.addEventListener('click', async () => {
+  if (!installPrompt) return;
+  await installPrompt.prompt();
+  await installPrompt.userChoice;
+  installPrompt = null;
+  installBtn.hidden = true;
+});

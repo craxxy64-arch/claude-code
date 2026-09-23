@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "test:unit": "node --experimental-strip-types --test tests/unit/*.test.ts",
     "fetch-model": "node scripts/fetch-model.mjs",
-    "test:e2e": "node tests/e2e/run-e2e.mjs"
+    "test:e2e": "node tests/e2e/run-e2e.mjs",
+    "build:pages": "node scripts/build-pages.mjs"
   },
   "dependencies": {
     "@tensorflow-models/coco-ssd": "^2.2.3",

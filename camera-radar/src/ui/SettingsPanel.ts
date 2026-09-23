@@ -167,6 +167,10 @@ export class SettingsPanel {
     const foot = document.createElement('section');
     foot.className = 'set-group';
     foot.innerHTML = `
+      <h4>Install as an app</h4>
+      <p class="set-note">Chrome / Edge: use the <b>Install app</b> button in the toolbar (or the install icon in the address bar).
+      iPhone / iPad (Safari): Share → <b>Add to Home Screen</b>. Android: menu → <b>Install app</b>.
+      Once installed it opens in its own window and works offline.</p>
       <h4>Privacy</h4>
       <p class="set-note">Camera frames are processed only inside this browser tab (TensorFlow.js + canvas). Nothing is uploaded.
       Recordings and snapshots stay in memory until you choose to save them. Only these preferences are stored, in this browser's local storage.
