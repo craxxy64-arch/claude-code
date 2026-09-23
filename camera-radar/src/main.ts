@@ -1,3 +1,5 @@
+import '@fontsource-variable/inter';
+import '@fontsource-variable/jetbrains-mono';
 import './styles/main.css';
 import { App } from './app.ts';
 import { errorMessage, logger } from './utils/logger.ts';

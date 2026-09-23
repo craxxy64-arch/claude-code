@@ -88,7 +88,7 @@ export class App {
   constructor() {
     this.camera = new CameraManager($<HTMLVideoElement>('video'));
     this.radar = new RadarRenderer($<HTMLCanvasElement>('radar'));
-    this.analyticsView = new AnalyticsPanel($('metrics'), $('targetList'), $('eventLog'), $('targetCount'), (id) => this.select(id));
+    this.analyticsView = new AnalyticsPanel($('metrics'), $('targetList'), $('eventLog'), $('targetCount'), (id) => this.select(id), $('heroStats'));
     this.targetPanel = new TargetPanel($('targetDrawer'), $('tdTitle'), $('tdBody'), (t) => this.exportTrack(t));
     this.settingsPanel = new SettingsPanel($('settingsBody'), this.settings, () => {
       this.settings.reset();
@@ -428,6 +428,13 @@ export class App {
       ? `${cam.label || 'Camera'} · ${cam.width}×${cam.height} · ${cam.measuredFps.toFixed(0)} fps${cam.muted ? ' · NO SIGNAL' : ''}`
       : cam.message;
     if (live) setChip('chipCamera', cam.muted ? 'warn' : 'ok', `${cam.measuredFps.toFixed(0)} FPS`);
+    $('hudLive').hidden = !live;
+    if (live) {
+      const src = this.camera.sourceKind === 'file' ? 'VIDEO' : 'LIVE';
+      $('hudLiveText').textContent = `${src} · ${cam.width}×${cam.height} · ${cam.measuredFps.toFixed(0)} FPS · ${tracks.length} TGT`;
+    }
+    const d = this.detector.info;
+    $('sysBackend').textContent = d.status === 'ready' ? `${d.backend} · ${d.runtime}` : d.status;
 
     // Motion panel.
     const motionOn = this.settings.get('motionEnabled') && live;
@@ -444,6 +451,7 @@ export class App {
     const hot = this.motion.heatmap.hotspot(t);
     $('motionHotspot').textContent = hot ? `${hot.zone} (${Math.round(hot.share * 100)}%)` : '—';
     const css = getComputedStyle(document.documentElement);
+    drawSparkline($<HTMLCanvasElement>('fpsSpark'), this.analytics.fpsHistory, css.getPropertyValue('--accent').trim() || '#5cf2b0', css.getPropertyValue('--line').trim());
     drawSparkline($<HTMLCanvasElement>('motionSpark'), this.motion.heatmap.timeline(t), css.getPropertyValue('--warn').trim() || '#ffb547', css.getPropertyValue('--line').trim());
 
     // Recording timer.
@@ -733,7 +741,7 @@ export class App {
     const btn = $<HTMLButtonElement>('btnRecord');
     btn.classList.toggle('is-recording', rec);
     btn.querySelector('.lbl')!.textContent = rec ? 'Stop' : 'Record';
-    btn.querySelector('.ico')!.textContent = rec ? '■' : '●';
+    btn.querySelector('use')?.setAttribute('href', rec ? '#i-stop' : '#i-rec');
     if (rec) {
       setChip('chipRec', 'alert', '00:00');
       this.pushEvent({ at: Date.now(), type: 'system', text: `Recording started${this.recorder.overlays ? ' (with overlays)' : ''}` });
